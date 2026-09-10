@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.env
+*.pfx
+*.pem
+service_account.json
+outputs/*
+!outputs/.gitkeep
+.ipynb_checkpoints/
+.DS_Store
