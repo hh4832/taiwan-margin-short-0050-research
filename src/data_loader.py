@@ -16,8 +16,13 @@ def _as_datetime_frame(value: object, name: str) -> pd.DataFrame:
     # their already date-like index. Do not use this helper for financial
     # statement period indexes, which require FinLab deadline semantics.
     source = value.to_frame() if isinstance(value, pd.Series) else value
-    frame = pd.DataFrame(source).copy()
-    frame.index = pd.to_datetime(frame.index)
+    # Construct from an ndarray rather than from the FinLab object/manager.
+    # `pd.DataFrame(source)` is not sufficient with current FinLab on Python
+    # 3.13 because the protected subclass can survive that constructor.
+    values = source.to_numpy(copy=True)
+    index = pd.to_datetime(source.index.to_numpy(copy=True))
+    columns = source.columns.copy()
+    frame = pd.DataFrame(values, index=index, columns=columns)
     if frame.index.has_duplicates:
         raise ValueError(f"{name} contains duplicate dates")
     return frame.sort_index()

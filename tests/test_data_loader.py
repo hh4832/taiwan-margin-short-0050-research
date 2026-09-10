@@ -17,6 +17,10 @@ class ProtectedIndexFrame(pd.DataFrame):
             raise AttributeError("direct index assignment is protected")
         super().__setattr__(name, value)
 
+    def to_numpy(self, *args, **kwargs):
+        object.__setattr__(self, "to_numpy_called", True)
+        return super().to_numpy(*args, **kwargs)
+
 
 class DataLoaderTests(unittest.TestCase):
     def test_converts_dataframe_subclass_before_index_normalization(self):
@@ -27,3 +31,4 @@ class DataLoaderTests(unittest.TestCase):
         self.assertIsInstance(result.index, pd.DatetimeIndex)
         self.assertEqual(result.index[-1], pd.Timestamp("2026-09-10"))
         self.assertIsInstance(source, ProtectedIndexFrame)
+        self.assertTrue(source.to_numpy_called)
