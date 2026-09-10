@@ -10,7 +10,13 @@ from .config import FINLAB_FIELDS
 def _as_datetime_frame(value: object, name: str) -> pd.DataFrame:
     if not isinstance(value, (pd.DataFrame, pd.Series)):
         raise TypeError(f"{name} must be a pandas object, got {type(value).__name__}")
-    frame = value.to_frame() if isinstance(value, pd.Series) else value.copy()
+    # FinlabDataFrame.copy() intentionally preserves its subclass and blocks
+    # direct index assignment. These inputs are daily market datasets, so make
+    # the conversion to ordinary pandas semantics explicit before normalising
+    # their already date-like index. Do not use this helper for financial
+    # statement period indexes, which require FinLab deadline semantics.
+    source = value.to_frame() if isinstance(value, pd.Series) else value
+    frame = pd.DataFrame(source).copy()
     frame.index = pd.to_datetime(frame.index)
     if frame.index.has_duplicates:
         raise ValueError(f"{name} contains duplicate dates")
