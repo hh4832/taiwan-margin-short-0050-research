@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import pandas as pd
+from pandas.core.frame import DataFrame as NativeDataFrame
 
 from .config import FINLAB_FIELDS
 
@@ -22,10 +23,16 @@ def _as_datetime_frame(value: object, name: str) -> pd.DataFrame:
     values = source.to_numpy(copy=True)
     index = pd.to_datetime(source.index.to_numpy(copy=True))
     columns = source.columns.copy()
-    frame = pd.DataFrame(values, index=index, columns=columns)
+    order = index.argsort()
+    frame = NativeDataFrame(values[order], index=index.take(order), columns=columns)
+    if type(frame) is not NativeDataFrame:
+        raise TypeError(
+            f"{name} could not be detached from {type(value).__name__}; "
+            f"rebuilt type is {type(frame).__name__}"
+        )
     if frame.index.has_duplicates:
         raise ValueError(f"{name} contains duplicate dates")
-    return frame.sort_index()
+    return frame
 
 
 def load_finlab_data(provider=None) -> dict[str, pd.DataFrame]:
