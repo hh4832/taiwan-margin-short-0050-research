@@ -70,6 +70,8 @@ Run All 在統計前檢查 dataset coverage、融資/融券 accounting identity�
 
 ## Colab Run All
 
+Colab 的 Python runtime 可能由平台升級；notebook 接受 Python 3.11 以上並在 `run_info.txt` 記錄實際版本，不再要求版本必須剛好等於 3.11。
+
 1. 在 Colab Secrets 新增 `GITHUB_TOKEN`（private repo 讀取權限），以及需要時的 FinLab credential；不要寫進 notebook。
 2. 點上方 badge，依序 Run All。
 3. Notebook 安裝依賴、clone 或更新 repo、執行 FinLab login、呼叫 `src.pipeline`、顯示 diagnostics/results。

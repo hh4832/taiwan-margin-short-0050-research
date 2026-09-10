@@ -6,7 +6,7 @@ This repository studies whether Taiwan-wide margin financing and short-selling b
 
 ## Rules
 
-- Use Python 3.11 and relative paths (`pathlib`).
+- Support Python 3.11 or newer (including the current Colab runtime) and use relative paths (`pathlib`).
 - Keep research logic in `src/`; notebooks only orchestrate.
 - Never hard-code credentials. Colab private-repo access uses `GITHUB_TOKEN` from Colab Secrets.
 - Signal data is complete after d0 close; the earliest tradable benchmark is the next valid 0050 open (O1).
