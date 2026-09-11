@@ -10,7 +10,6 @@ import pandas as pd
 from .config import ResearchConfig
 from .data_loader import load_finlab_data
 from .diagnostics import aggregate_comparison, dataset_coverage, stabilize_reconciliation
-from .fdr import apply_fdr
 from .features import adjusted_short_change, adjust_short_for_suspensions, build_feature_catalog, kday_change, position_market_value, rolling_ratio, trailing_percentile
 from .outcomes import build_outcomes
 from .reporting import create_run_directory, signal_summary, thermometer_table, write_run_info
@@ -62,7 +61,11 @@ def _build_base_series(d: dict[str, pd.DataFrame], primary_symbols: set[str]) ->
     suspension_diag = pd.DataFrame({
         "date": suspension_mask.index,
         "affected_security_count": suspension_mask.sum(axis=1).to_numpy(),
-        "limitation": "Retrospective sensitivity: observed start/end inclusive; missing end uses start only. key_date is not verified publication time; pre-start covering and historical completeness remain unknown.",
+        "SUSPENSION_COVERAGE_LIMITATION": bool(d["short_suspension"].attrs.get("quarantined_rows", 0)),
+        "limitation": d["short_suspension"].attrs.get(
+            "limitation",
+            "Retrospective sensitivity: key_date is not verified publication time.",
+        ),
     })
     return series, suspension_diag
 
@@ -109,9 +112,12 @@ def build_features(d: dict[str, pd.DataFrame], primary_symbols: set[str], config
     return frame
 
 
-def run(config: ResearchConfig | None = None, provider=None, export: bool = True) -> dict:
+def run_stage_zero(config: ResearchConfig | None = None, provider=None) -> dict:
+    """Load data and run diagnostics without starting the statistical study."""
     config = config or ResearchConfig()
     d = load_finlab_data(provider)
+    suspension_invalid = d.pop("short_suspension_invalid")
+    suspension_validation = d.pop("short_suspension_validation")
     coverage = dataset_coverage(d)
     d, reconciliation = stabilize_reconciliation(d, config.reconciliation_tolerance, config.min_reconciliation_ratio)
     universe_diag, primary_symbols, universe_limitation = build_universe_diagnostics(d["margin_balance"], d["market_value"])
@@ -126,6 +132,33 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         summary, annual = aggregate_comparison(individual, market, name)
         agg_summary.append(summary); annual_diffs.append(annual)
     reconciliation = pd.concat([reconciliation, *agg_summary], ignore_index=True, sort=False)
+    return {
+        "datasets": d,
+        "coverage": coverage,
+        "reconciliation": reconciliation,
+        "universe": universe_diag,
+        "primary_symbols": primary_symbols,
+        "base_series": base,
+        "annual_differences": annual_diffs,
+        "suspension": suspension_diag,
+        "suspension_validation": suspension_validation,
+        "suspension_invalid_events": suspension_invalid,
+    }
+
+
+def run(config: ResearchConfig | None = None, provider=None, export: bool = True) -> dict:
+    from .fdr import apply_fdr
+
+    config = config or ResearchConfig()
+    stage_zero = run_stage_zero(config, provider)
+    d = stage_zero["datasets"]
+    coverage = stage_zero["coverage"]
+    reconciliation = stage_zero["reconciliation"]
+    universe_diag = stage_zero["universe"]
+    primary_symbols = stage_zero["primary_symbols"]
+    suspension_diag = stage_zero["suspension"]
+    suspension_validation = stage_zero["suspension_validation"]
+    suspension_invalid = stage_zero["suspension_invalid_events"]
     features = build_features(d, primary_symbols, config)
     outcomes = build_outcomes(d["open"]["0050"], d["close"]["0050"], config.outcome_horizons)
     primary = run_primary_tests(features, outcomes)
@@ -133,11 +166,11 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
     close_0050 = d["close"]["0050"]
     controlled = run_controlled_tests(features, outcomes, close_0050)
     annual_signal = annual_results(fdr, features, outcomes)
-    annual = pd.concat([pd.concat(annual_diffs, ignore_index=True), annual_signal], ignore_index=True, sort=False)
+    annual = pd.concat([pd.concat(stage_zero["annual_differences"], ignore_index=True), annual_signal], ignore_index=True, sort=False)
     neighborhood = neighborhood_consistency(fdr)
     regimes = regime_results(fdr, features, outcomes, close_0050)
     robustness = pd.concat([neighborhood, regimes], ignore_index=True, sort=False)
-    result = {"coverage": coverage, "reconciliation": reconciliation, "universe": universe_diag, "suspension": suspension_diag, "features": features, "outcomes": outcomes, "primary": primary, "fdr": fdr, "controlled": controlled, "annual": annual, "robustness": robustness}
+    result = {"coverage": coverage, "reconciliation": reconciliation, "universe": universe_diag, "suspension": suspension_diag, "suspension_validation": suspension_validation, "suspension_invalid_events": suspension_invalid, "features": features, "outcomes": outcomes, "primary": primary, "fdr": fdr, "controlled": controlled, "annual": annual, "robustness": robustness}
     if export:
         run_dir, _ = create_run_directory(config.output_root, config.timezone)
         result["run_dir"] = run_dir
@@ -146,6 +179,8 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         universe_diag.to_csv(run_dir / "universe_diagnostics.csv", index=False)
         suspension_diag.to_csv(run_dir / "suspension_diagnostics.csv", index=False)
         d["short_suspension"].to_csv(run_dir / "suspension_events.csv", index=False)
+        suspension_invalid.to_csv(run_dir / "suspension_invalid_events.csv", index=False)
+        suspension_validation.to_csv(run_dir / "suspension_validation_summary.csv", index=False)
         build_feature_catalog().to_csv(run_dir / "feature_catalog.csv", index=False)
         primary.to_csv(run_dir / "primary_results.csv", index=False)
         fdr.to_csv(run_dir / "fdr_results.csv", index=False)
