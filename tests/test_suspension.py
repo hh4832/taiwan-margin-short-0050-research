@@ -142,6 +142,7 @@ class SuspensionTests(unittest.TestCase):
 
         fake_fdr = types.ModuleType("src.fdr")
         fake_fdr.apply_fdr = lambda frame: frame
+        fake_fdr.fdr_diagnostics = lambda frame: pd.DataFrame()
         empty = pd.DataFrame()
         with (
             patch.dict(sys.modules, {"src.fdr": fake_fdr}),
@@ -181,8 +182,14 @@ class SuspensionTests(unittest.TestCase):
         self.assertTrue(change.dropna().eq(0).all())
 
     def test_universe_counts_etfs_outside_intersection(self):
-        diag, _, _ = build_universe_diagnostics(pd.DataFrame(columns=["2330", "0050"]), pd.DataFrame(columns=["2330"]))
-        self.assertEqual(diag.set_index("category").loc["excluded_etf_like_or_non_common", "count"], 1)
+        diag, _, limitation = build_universe_diagnostics(pd.DataFrame(columns=["2330", "0050"]), pd.DataFrame(columns=["2330"]))
+        indexed = diag.set_index("category")
+        self.assertEqual(indexed.loc["excluded_etf_like_or_non_common", "count"], 1)
+        self.assertEqual(indexed.loc["margin_symbols", "count"], 2)
+        self.assertEqual(indexed.loc["market_value_symbols", "count"], 1)
+        self.assertEqual(indexed.loc["intersection", "count"], 1)
+        self.assertEqual(indexed.loc["primary_common_equity", "count"], 1)
+        self.assertTrue(limitation)
 
     def test_rank_deficient_model_is_explicitly_skipped(self):
         result = controlled_regression(pd.Series([0.0] * 30), pd.Series(range(30)), pd.Series(range(30)))

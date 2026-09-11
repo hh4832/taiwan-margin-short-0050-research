@@ -45,7 +45,7 @@
 
 ## Rolling percentile 與固定 PR groups
 
-只使用當時及之前的 126/252/504/756 個交易觀測。固定 bins：PR0–5、5–20、20–40、40–60、60–80、80–95、95–100；主要 extreme comparison 是 PR≤5 或 PR≥95 vs non-group，不可事後新增門檻追結果。
+只使用當時及之前的 126/252/504/756 個**有效交易觀測**；缺值日保持缺值，不 forward-fill，也不降低完整窗口要求。固定 descriptive bins 採左閉右開：`[0,5)`、`[5,20)`、`[20,40)`、`[40,60)`、`[60,80)`、`[80,95)`、`[95,100]`。主要 inferential comparison 仍獨立定義為 PR≤5 或 PR≥95 vs non-group，不可事後新增門檻追結果；七個 descriptive bins 不進 family/global FDR。
 
 ## Stage 0 diagnostics
 
@@ -55,7 +55,7 @@ Run All 在統計前檢查 dataset coverage、融資/融券 accounting identity�
 
 ## 停券處理
 
-融券同時保留 raw 與 adjusted signals。停券表按事件讀取，以 symbol、停券起日(最後回補日)、停券迄日對應個股；起訖日均包含，僅遮罩既有交易日。缺少迄日只遮罩起日，不推測區間。缺少起日、迄日早於起日或無法解析的事件列會完整保留在 quarantine，不加入 adjusted mask，也不阻斷 raw analysis。餘額變化以前後同一組股票計算，排除整個比較窗口內受停券影響者，避免遮罩進出造成假變化。
+融券同時保留 raw 與 adjusted signals。停券表按事件讀取，以 symbol、停券起日(最後回補日)、停券迄日對應個股；起訖日均包含，僅遮罩既有交易日。缺少迄日只遮罩起日，不推測區間。缺少起日、迄日早於起日或無法解析的事件列會完整保留在 quarantine，不加入 adjusted mask，也不阻斷 raw analysis。餘額變化以前後同一組股票計算，排除整個比較窗口內受停券影響者，避免遮罩進出造成假變化。所有 adjusted predictor 固定標示 `retrospective_sensitivity=True`、`publication_time_verified=False`、`is_live_eligible=False`；quarantine 非空時另標示 `SUSPENSION_COVERAGE_LIMITATION=True`。
 
 這是事後敏感度分析：key_date 未證實為歷史公告日，不能據此宣稱停券資料在當時已可取得；起日前提前回補與歷史事件完整性仍有限制。dataset_coverage 的停券起訖指有效事件起日範圍，不是下載或公告時間。輸出 `suspension_events.csv`、`suspension_invalid_events.csv`、`suspension_validation_summary.csv` 與 `suspension_diagnostics.csv`，分別保存有效事件、原始 quarantine、Stage 0 coverage 限制與每日遮罩數。制度性停券與強制回補不得解讀為主動市場訊號。
 
@@ -70,7 +70,7 @@ Run All 在統計前檢查 dataset coverage、融資/融券 accounting identity�
 - Level C：raw p < .05，但 family/global 未通過
 - No Evidence：raw p ≥ .05
 
-候選訊號另外檢查 k、rolling window、相鄰 horizon、相鄰 PR tail 的方向一致性；`neighborhood_consistency_score` 只作 robustness。強訊號還要拆年度、bull/bear/sideways 與高低波動，並檢查少數年份/事件集中。最終只能標記「保留／修改後再測／淘汰／無法判定」。
+候選訊號另外依 fixed horizon、fixed k、fixed rolling window 檢查方向一致性；consistency 只作 robustness，不能取代 FDR。年度驗證完整納入所有 Level A/B，不依 raw p-value 任意截取前 30 名。short-cover raw/normalized/adjusted variants 另行標記方向衝突；`approx_margin_maintenance` 以七 bins 描述性分類單調、U 型或 mixed，不額外加入新模型。robust 預設要求至少 3 個有樣本年度、年度與 neighborhood 方向一致率均至少 60%、單一年樣本占比不超過 50%，門檻明列於 `ResearchConfig` 與 `run_info.txt`。最終分開輸出 statistical evidence、robustness status、live eligibility 與「保留／修改後再測／淘汰／無法判定」。
 
 ## Colab Run All
 
@@ -85,7 +85,7 @@ Colab 的 Python runtime 可能由平台升級；notebook 接受 Python 3.11 以
 
 ## Outputs 與追溯性
 
-每次建立 `outputs/YYYYMMDD_HHMMSS_<git_commit>/`，包含 `run_info.txt`、coverage/reconciliation/universe/feature catalog、primary/FDR/annual/robustness tables、`signal_summary.md`、`thermometer_signals.csv`、bias checklist 與可選 parquet。大型 outputs 不進 Git。`run_info.txt` 記錄 commit、branch、時間、Python/FinLab 版本、各資料起訖與研究設定。
+每次建立 `outputs/YYYYMMDD_HHMMSS_<git_commit>/`，包含 `run_info.txt`、coverage/reconciliation/universe/feature catalog、level coverage、primary/FDR diagnostics、controlled low/high tails、七個 PR bins、annual summary、neighborhood、variant conflict、shape、universe sensitivity、`signal_summary.md`、`thermometer_signals.csv`、bias checklist 與可選 parquet。thermometer 的 `signal_date` 只取最新有效 0050 收盤日，不受未來 auxiliary/suspension event 日期影響。大型 outputs 不進 Git。`run_info.txt` 記錄 commit、branch、時間、Python/FinLab 版本、各資料起訖與研究設定。
 
 `thermometer_signals.csv` 保留未來接入 `taiwan-market-thermometer` 的 schema；本 repo 不修改該專案。
 

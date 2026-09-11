@@ -10,10 +10,10 @@ import pandas as pd
 from .config import ResearchConfig
 from .data_loader import load_finlab_data
 from .diagnostics import aggregate_comparison, dataset_coverage, stabilize_reconciliation
-from .features import adjusted_short_change, adjust_short_for_suspensions, build_feature_catalog, kday_change, position_market_value, rolling_ratio, trailing_percentile
+from .features import adjusted_short_change, adjust_short_for_suspensions, build_feature_catalog, build_level_features, kday_change, level_feature_diagnostics, position_market_value, rolling_ratio, trailing_percentile
 from .outcomes import build_outcomes
-from .reporting import create_run_directory, signal_summary, thermometer_table, write_run_info
-from .statistics import annual_results, neighborhood_consistency, regime_results, run_controlled_tests, run_primary_tests
+from .reporting import add_suspension_reporting_fields, assess_signals, create_run_directory, get_latest_tradable_signal_date, signal_summary, thermometer_table, write_run_info
+from .statistics import annual_results, annual_robustness_summary, classify_pr_shapes, neighborhood_consistency, regime_results, run_controlled_tests, run_pr_bin_descriptive, run_primary_tests, short_cover_variant_diagnostics
 from .universe import build_universe_diagnostics
 
 
@@ -50,6 +50,11 @@ def _build_base_series(d: dict[str, pd.DataFrame], primary_symbols: set[str]) ->
         "margin_balance": d["margin_balance"].sum(axis=1, min_count=1),
         "short_balance": d["short_balance"].sum(axis=1, min_count=1),
         "short_balance_adjusted": adjusted["short_balance"].sum(axis=1, min_count=1),
+        "margin_position_market_value": margin_position,
+        "short_position_market_value": short_position,
+        "short_position_market_value_adjusted": short_position_adjusted,
+        "margin_credit_amount": credit,
+        "market_cap": market_cap,
         "margin_position_level": margin_position / market_cap,
         "margin_credit_level": credit / market_cap,
         "approx_margin_maintenance": margin_position / credit.replace(0, np.nan),
@@ -147,7 +152,7 @@ def run_stage_zero(config: ResearchConfig | None = None, provider=None) -> dict:
 
 
 def run(config: ResearchConfig | None = None, provider=None, export: bool = True) -> dict:
-    from .fdr import apply_fdr
+    from .fdr import apply_fdr, fdr_diagnostics
 
     config = config or ResearchConfig()
     stage_zero = run_stage_zero(config, provider)
@@ -161,16 +166,65 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
     suspension_invalid = stage_zero["suspension_invalid_events"]
     features = build_features(d, primary_symbols, config)
     outcomes = build_outcomes(d["open"]["0050"], d["close"]["0050"], config.outcome_horizons)
+    level_diagnostics = level_feature_diagnostics(stage_zero["base_series"], features, outcomes)
     primary = run_primary_tests(features, outcomes)
     fdr = apply_fdr(primary) if not primary.empty else primary
+    fdr_diag = fdr_diagnostics(fdr)
+    pr_bins = run_pr_bin_descriptive(features, outcomes)
     close_0050 = d["close"]["0050"]
     controlled = run_controlled_tests(features, outcomes, close_0050)
     annual_signal = annual_results(fdr, features, outcomes)
+    annual_summary = annual_robustness_summary(
+        annual_signal, config.robustness_min_years, config.robustness_max_year_sample_share,
+    )
     annual = pd.concat([pd.concat(stage_zero["annual_differences"], ignore_index=True), annual_signal], ignore_index=True, sort=False)
     neighborhood = neighborhood_consistency(fdr)
+    short_cover_variants, variant_consistency = short_cover_variant_diagnostics(fdr)
+    shapes = classify_pr_shapes(pr_bins)
     regimes = regime_results(fdr, features, outcomes, close_0050)
     robustness = pd.concat([neighborhood, regimes], ignore_index=True, sort=False)
-    result = {"coverage": coverage, "reconciliation": reconciliation, "universe": universe_diag, "suspension": suspension_diag, "suspension_validation": suspension_validation, "suspension_invalid_events": suspension_invalid, "features": features, "outcomes": outcomes, "primary": primary, "fdr": fdr, "controlled": controlled, "annual": annual, "robustness": robustness}
+
+    all_symbols = set(map(str, d["margin_balance"].columns)) & set(map(str, d["market_value"].columns))
+    all_base, _ = _build_base_series(d, all_symbols)
+    all_level_features = build_level_features(all_base, config)
+    all_level_results = run_primary_tests(all_level_features, outcomes)
+    level_predictors = set(all_level_results.get("predictor", pd.Series(dtype="object")))
+    primary_level_results = (
+        primary[primary["predictor"].isin(level_predictors)].copy()
+        if "predictor" in primary else primary.copy()
+    )
+    primary_level_results["universe"] = "primary_common_equity"
+    all_level_results["universe"] = "all_available_margin_securities"
+    universe_sensitivity = pd.concat([primary_level_results, all_level_results], ignore_index=True, sort=False)
+
+    suspension_limited = bool(suspension_validation["SUSPENSION_COVERAGE_LIMITATION"].any())
+    assessed = assess_signals(
+        fdr, annual_summary, neighborhood, variant_consistency,
+        suspension_coverage_limitation=suspension_limited,
+        shape_diagnostics=shapes,
+        min_years=config.robustness_min_years,
+        min_direction_ratio=config.robustness_min_direction_ratio,
+        min_neighborhood_score=config.robustness_min_neighborhood_score,
+    )
+    primary_report = add_suspension_reporting_fields(primary, suspension_limited)
+    controlled_report = add_suspension_reporting_fields(controlled, suspension_limited)
+    pr_bins_report = add_suspension_reporting_fields(pr_bins, suspension_limited)
+    annual_report = add_suspension_reporting_fields(annual, suspension_limited)
+    short_cover_variants = add_suspension_reporting_fields(short_cover_variants, suspension_limited)
+    universe_sensitivity = add_suspension_reporting_fields(universe_sensitivity, suspension_limited)
+    latest_signal_date = get_latest_tradable_signal_date(close_0050)
+    result = {
+        "coverage": coverage, "reconciliation": reconciliation, "universe": universe_diag,
+        "suspension": suspension_diag, "suspension_validation": suspension_validation,
+        "suspension_invalid_events": suspension_invalid, "features": features, "outcomes": outcomes,
+        "level_feature_diagnostics": level_diagnostics, "primary": primary_report, "fdr": assessed,
+        "fdr_diagnostics": fdr_diag, "controlled": controlled_report, "pr_bins": pr_bins_report,
+        "annual": annual_report, "annual_robustness_summary": annual_summary,
+        "neighborhood": neighborhood, "short_cover_variants": short_cover_variants,
+        "variant_direction_consistency": variant_consistency, "shape_diagnostics": shapes,
+        "universe_sensitivity": universe_sensitivity, "assessed_signals": assessed,
+        "latest_signal_date": latest_signal_date, "robustness": robustness,
+    }
     if export:
         run_dir, _ = create_run_directory(config.output_root, config.timezone)
         result["run_dir"] = run_dir
@@ -182,13 +236,22 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         suspension_invalid.to_csv(run_dir / "suspension_invalid_events.csv", index=False)
         suspension_validation.to_csv(run_dir / "suspension_validation_summary.csv", index=False)
         build_feature_catalog().to_csv(run_dir / "feature_catalog.csv", index=False)
-        primary.to_csv(run_dir / "primary_results.csv", index=False)
-        fdr.to_csv(run_dir / "fdr_results.csv", index=False)
-        annual.to_csv(run_dir / "annual_results.csv", index=False)
+        level_diagnostics.to_csv(run_dir / "level_feature_diagnostics.csv", index=False)
+        primary_report.to_csv(run_dir / "primary_results.csv", index=False)
+        assessed.to_csv(run_dir / "fdr_results.csv", index=False)
+        fdr_diag.to_csv(run_dir / "fdr_diagnostics.csv", index=False)
+        pr_bins_report.to_csv(run_dir / "pr_bin_results.csv", index=False)
+        annual_report.to_csv(run_dir / "annual_results.csv", index=False)
+        annual_summary.to_csv(run_dir / "annual_robustness_summary.csv", index=False)
+        neighborhood.to_csv(run_dir / "neighborhood_consistency.csv", index=False)
+        short_cover_variants.to_csv(run_dir / "short_cover_variant_results.csv", index=False)
+        variant_consistency.to_csv(run_dir / "variant_direction_consistency.csv", index=False)
+        shapes.to_csv(run_dir / "shape_diagnostics.csv", index=False)
+        universe_sensitivity.to_csv(run_dir / "universe_sensitivity_results.csv", index=False)
         robustness.to_csv(run_dir / "robustness_results.csv", index=False)
-        (run_dir / "signal_summary.md").write_text(signal_summary(fdr), encoding="utf-8")
-        thermometer_table(fdr, coverage["latest_observation_date"].max()).to_csv(run_dir / "thermometer_signals.csv", index=False)
-        controlled.to_csv(run_dir / "controlled_results.csv", index=False)
+        (run_dir / "signal_summary.md").write_text(signal_summary(assessed), encoding="utf-8")
+        thermometer_table(assessed, latest_signal_date).to_csv(run_dir / "thermometer_signals.csv", index=False)
+        controlled_report.to_csv(run_dir / "controlled_results.csv", index=False)
         features.join(outcomes).to_parquet(run_dir / "research_dataset.parquet")
         try: finlab_version = importlib.metadata.version("finlab")
         except importlib.metadata.PackageNotFoundError: finlab_version = "unknown"

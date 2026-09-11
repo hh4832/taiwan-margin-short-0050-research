@@ -16,6 +16,10 @@ class ResearchConfig:
     reconciliation_tolerance: float = 1e-9
     min_reconciliation_ratio: float = 0.99999
     min_group_n: int = 20
+    robustness_min_years: int = 3
+    robustness_min_direction_ratio: float = 0.60
+    robustness_min_neighborhood_score: float = 0.60
+    robustness_max_year_sample_share: float = 0.50
     output_root: Path = Path("outputs")
     primary_universe: str = "historically identifiable Taiwan common equities"
 
