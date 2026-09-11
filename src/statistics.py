@@ -68,19 +68,147 @@ def run_pr_bin_descriptive(features: pd.DataFrame, outcomes: pd.DataFrame) -> pd
     return pd.DataFrame(rows)
 
 
-def controlled_regression(signal: pd.Series, future: pd.Series, prior_return: pd.Series) -> dict:
-    frame = pd.concat({"future": future, "signal": signal, "prior": prior_return}, axis=1).replace([np.inf, -np.inf], np.nan).dropna()
-    if len(frame) < 20:
-        return {"N": len(frame), "signal_beta": np.nan, "signal_p_value": np.nan, "status": "insufficient_sample"}
-    design = np.column_stack([np.ones(len(frame)), frame[["signal", "prior"]].to_numpy()])
-    if np.linalg.matrix_rank(design) < design.shape[1]:
-        return {"N": len(frame), "signal_beta": np.nan, "signal_p_value": np.nan, "status": "rank_deficient"}
+CONTROLLED_STATUSES = (
+    "estimated",
+    "insufficient_sample",
+    "insufficient_group_sample",
+    "no_signal_variation",
+    "no_prior_variation",
+    "rank_deficient",
+    "high_leverage_unstable",
+    "hc3_nonfinite",
+)
+
+
+def _fit_base_ols(future: pd.Series, design: pd.DataFrame):
     import statsmodels.api as sm
-    fit = sm.OLS(frame["future"], pd.DataFrame(design, index=frame.index, columns=["const", "signal", "prior"])).fit(cov_type="HC3")
-    return {"N": len(frame), "signal_beta": fit.params["signal"], "signal_p_value": fit.pvalues["signal"], "status": "estimated"}
+
+    return sm.OLS(future, design).fit()
 
 
-def run_controlled_tests(features: pd.DataFrame, outcomes: pd.DataFrame, close: pd.Series) -> pd.DataFrame:
+def _controlled_result(
+    *,
+    n: int,
+    signal_n: int,
+    control_n: int,
+    status: str,
+    signal_beta=np.nan,
+    signal_se=np.nan,
+    signal_p_value=np.nan,
+    max_leverage=np.nan,
+    mean_leverage=np.nan,
+    high_leverage_n: int = 0,
+    design_rank=np.nan,
+    design_condition_number=np.nan,
+) -> dict:
+    return {
+        "N": n,
+        "N_total": n,
+        "signal_n": signal_n,
+        "control_n": control_n,
+        "signal_rate": signal_n / n if n else np.nan,
+        "signal_beta": signal_beta,
+        "signal_se": signal_se,
+        "signal_p_value": signal_p_value,
+        "max_leverage": max_leverage,
+        "mean_leverage": mean_leverage,
+        "high_leverage_n": high_leverage_n,
+        "design_rank": design_rank,
+        "design_condition_number": design_condition_number,
+        "status": status,
+        "is_interpretable": bool(status == "estimated" and np.isfinite(signal_p_value)),
+        "interpretation": "可解讀" if status == "estimated" and np.isfinite(signal_p_value) else "無法判定",
+    }
+
+
+def controlled_regression(
+    signal: pd.Series,
+    future: pd.Series,
+    prior_return: pd.Series,
+    min_total_n: int = 20,
+    min_tail_n: int = 20,
+    min_control_n: int = 20,
+    leverage_tolerance: float = 1e-10,
+    max_condition_number: float = 1e12,
+) -> dict:
+    """Estimate a controlled tail model only when HC3 is numerically reliable."""
+    frame = pd.concat(
+        {"future": future, "signal": signal, "prior": prior_return}, axis=1
+    ).replace([np.inf, -np.inf], np.nan).dropna()
+    n = len(frame)
+    signal_n = int(frame["signal"].eq(1).sum())
+    control_n = int(frame["signal"].eq(0).sum())
+    result = lambda status, **kwargs: _controlled_result(
+        n=n, signal_n=signal_n, control_n=control_n, status=status, **kwargs
+    )
+    if n < min_total_n:
+        return result("insufficient_sample")
+    if frame["signal"].nunique() < 2:
+        return result("no_signal_variation")
+    if frame["prior"].nunique() < 2:
+        return result("no_prior_variation")
+    if signal_n < min_tail_n or control_n < min_control_n:
+        return result("insufficient_group_sample")
+
+    design = pd.DataFrame(
+        {"const": 1.0, "signal": frame["signal"].astype(float), "prior": frame["prior"].astype(float)},
+        index=frame.index,
+    )
+    design_values = design.to_numpy()
+    rank = int(np.linalg.matrix_rank(design_values))
+    condition_number = float(np.linalg.cond(design_values))
+    if rank < design.shape[1] or not np.isfinite(condition_number) or condition_number >= max_condition_number:
+        return result("rank_deficient", design_rank=rank, design_condition_number=condition_number)
+
+    base_fit = _fit_base_ols(frame["future"], design)
+    base_beta = float(base_fit.params["signal"])
+    hat_diag = np.asarray(base_fit.get_influence().hat_matrix_diag, dtype=float)
+    finite_hat = np.isfinite(hat_diag)
+    max_leverage = float(np.max(hat_diag)) if finite_hat.all() and len(hat_diag) else np.nan
+    mean_leverage = float(np.mean(hat_diag)) if finite_hat.all() and len(hat_diag) else np.nan
+    leverage_cutoff = 1.0 - leverage_tolerance
+    high_leverage_n = int(np.count_nonzero((hat_diag >= leverage_cutoff) | ~finite_hat))
+    diagnostics = {
+        "signal_beta": base_beta if np.isfinite(base_beta) else np.nan,
+        "max_leverage": max_leverage,
+        "mean_leverage": mean_leverage,
+        "high_leverage_n": high_leverage_n,
+        "design_rank": rank,
+        "design_condition_number": condition_number,
+    }
+    if not finite_hat.all() or high_leverage_n:
+        return result("high_leverage_unstable", **diagnostics)
+
+    robust_fit = base_fit.get_robustcov_results(cov_type="HC3")
+    beta = float(robust_fit.params[1])
+    signal_se = float(robust_fit.bse[1])
+    signal_p_value = float(robust_fit.pvalues[1])
+    covariance = np.asarray(robust_fit.cov_params(), dtype=float)
+    if not (
+        np.isfinite(beta)
+        and np.isfinite(signal_se)
+        and np.isfinite(signal_p_value)
+        and np.isfinite(covariance).all()
+    ):
+        return result("hc3_nonfinite", **diagnostics)
+    return result(
+        "estimated", signal_beta=beta, signal_se=signal_se,
+        signal_p_value=signal_p_value, max_leverage=max_leverage,
+        mean_leverage=mean_leverage, high_leverage_n=high_leverage_n,
+        design_rank=rank, design_condition_number=condition_number,
+    )
+
+
+def run_controlled_tests(
+    features: pd.DataFrame,
+    outcomes: pd.DataFrame,
+    close: pd.Series,
+    min_total_n: int = 20,
+    min_tail_n: int = 20,
+    min_control_n: int = 20,
+    leverage_tolerance: float = 1e-10,
+    max_condition_number: float = 1e12,
+) -> pd.DataFrame:
     rows = []
     joined = features.join(outcomes, how="inner")
     priors = {k: close.pct_change(k, fill_method=None).reindex(joined.index) for k in (1, 3, 5, 10)}
@@ -94,13 +222,40 @@ def run_controlled_tests(features: pd.DataFrame, outcomes: pd.DataFrame, close: 
             for prior_k in (1, 3, 5, 10):
                 prior = priors[prior_k]
                 for outcome in [c for c in outcomes if c.startswith("O1_C")]:
-                    fit = controlled_regression(signal, joined[outcome], prior)
+                    fit = controlled_regression(
+                        signal, joined[outcome], prior,
+                        min_total_n=min_total_n, min_tail_n=min_tail_n,
+                        min_control_n=min_control_n,
+                        leverage_tolerance=leverage_tolerance,
+                        max_condition_number=max_condition_number,
+                    )
                     rows.append({
                         "predictor": feature, "family": meta.get("family"), "pr_group": label,
                         "k": meta.get("k"), "rolling_window": meta.get("window"),
                         "prior_k": prior_k, "outcome_horizon": outcome, **fit,
                     })
     return pd.DataFrame(rows)
+
+
+def controlled_regression_diagnostics(results: pd.DataFrame) -> pd.DataFrame:
+    """Summarize controlled-model estimability globally and by study cell."""
+    count_columns = ["total_models", *(f"{status}_models" for status in CONTROLLED_STATUSES)]
+    dimensions = ["family", "pr_group", "prior_k", "outcome_horizon"]
+
+    def summarize(group: pd.DataFrame, scope: str, keys: tuple = ()) -> dict:
+        counts = group["status"].value_counts() if "status" in group else pd.Series(dtype="int64")
+        row = {"scope": scope, **{name: value for name, value in zip(dimensions, keys)}, "total_models": len(group)}
+        row.update({f"{status}_models": int(counts.get(status, 0)) for status in CONTROLLED_STATUSES})
+        return row
+
+    if results.empty:
+        return pd.DataFrame([summarize(results, "overall")], columns=["scope", *dimensions, *count_columns])
+    rows = [summarize(results, "overall")]
+    rows.extend(
+        summarize(group, "family_pr_prior_horizon", keys)
+        for keys, group in results.groupby(dimensions, dropna=False)
+    )
+    return pd.DataFrame(rows, columns=["scope", *dimensions, *count_columns])
 
 
 def annual_results(results: pd.DataFrame, features: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:

@@ -1,5 +1,7 @@
 import unittest
 from unittest.mock import patch
+import importlib.util
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -14,13 +16,138 @@ from src.statistics import (
     run_pr_bin_descriptive,
     short_cover_variant_diagnostics,
     controlled_regression,
+    controlled_regression_diagnostics,
 )
 
 
+class FakeInfluence:
+    def __init__(self, leverage):
+        self.hat_matrix_diag = np.asarray(leverage, dtype=float)
+
+
+class FakeRobustFit:
+    def __init__(self, beta=.2, se=.05, p=.01, covariance=None):
+        self.params = np.array([0.0, beta, 0.1])
+        self.bse = np.array([0.01, se, 0.02])
+        self.pvalues = np.array([1.0, p, .5])
+        self._covariance = np.eye(3) if covariance is None else covariance
+
+    def cov_params(self):
+        return self._covariance
+
+
+class FakeBaseFit:
+    def __init__(self, leverage, robust=None):
+        self.params = pd.Series({"const": 0.0, "signal": .2, "prior": .1})
+        self._leverage = leverage
+        self._robust = robust or FakeRobustFit()
+        self.robust_called = False
+
+    def get_influence(self):
+        return FakeInfluence(self._leverage)
+
+    def get_robustcov_results(self, cov_type):
+        self.robust_called = True
+        if cov_type != "HC3":
+            raise AssertionError("controlled regression must preserve HC3")
+        return self._robust
+
+
+def balanced_inputs(n=80):
+    signal = pd.Series(np.r_[np.zeros(n // 2), np.ones(n - n // 2)])
+    prior = pd.Series(np.linspace(-1, 1, n))
+    future = .01 + .02 * signal + .03 * prior
+    return signal, future, prior
+
+
 class StatisticsTests(unittest.TestCase):
+    def test_normal_hc3_regression_has_finite_outputs(self):
+        signal, future, prior = balanced_inputs()
+        fake = FakeBaseFit(np.repeat(3 / len(signal), len(signal)))
+        with patch("src.statistics._fit_base_ols", return_value=fake):
+            result = controlled_regression(signal, future, prior)
+        self.assertEqual(result["status"], "estimated")
+        self.assertTrue(result["is_interpretable"])
+        self.assertTrue(fake.robust_called)
+        self.assertTrue(np.isfinite([result["signal_beta"], result["signal_se"], result["signal_p_value"]]).all())
+
+    @unittest.skipUnless(importlib.util.find_spec("statsmodels"), "statsmodels is not installed in this local runtime")
+    def test_real_statsmodels_hc3_integration(self):
+        signal, _, prior = balanced_inputs(100)
+        rng = np.random.default_rng(7)
+        future = .01 + .02 * signal + .03 * prior + pd.Series(rng.normal(0, .01, len(signal)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = controlled_regression(signal, future, prior)
+        self.assertEqual(result["status"], "estimated")
+        self.assertTrue(np.isfinite([result["signal_beta"], result["signal_se"], result["signal_p_value"]]).all())
+
     def test_controlled_insufficient_sample_status_is_preserved(self):
         result = controlled_regression(pd.Series([0.0, 1.0]), pd.Series([.1, .2]), pd.Series([0.0, .1]))
         self.assertEqual(result["status"], "insufficient_sample")
+
+    def test_insufficient_tail_and_control_groups(self):
+        prior = pd.Series(np.linspace(-1, 1, 60))
+        future = pd.Series(np.linspace(0, .1, 60))
+        tail_small = controlled_regression(pd.Series([1.0] * 2 + [0.0] * 58), future, prior)
+        control_small = controlled_regression(pd.Series([1.0] * 58 + [0.0] * 2), future, prior)
+        self.assertEqual(tail_small["status"], "insufficient_group_sample")
+        self.assertEqual(control_small["status"], "insufficient_group_sample")
+        self.assertEqual((tail_small["signal_n"], tail_small["control_n"]), (2, 58))
+        self.assertTrue(pd.isna(tail_small["signal_p_value"]))
+
+    def test_variation_and_rank_checks_precede_hc3(self):
+        _, future, prior = balanced_inputs()
+        no_signal = controlled_regression(pd.Series(np.zeros(80)), future, prior)
+        no_prior = controlled_regression(pd.Series(np.tile([0.0, 1.0], 40)), future, pd.Series(np.ones(80)))
+        signal = pd.Series(np.tile([0.0, 1.0], 40))
+        rank_deficient = controlled_regression(signal, future, signal)
+        almost_collinear = controlled_regression(signal, future, signal + np.linspace(0, 1e-14, 80))
+        self.assertEqual(no_signal["status"], "no_signal_variation")
+        self.assertEqual(no_prior["status"], "no_prior_variation")
+        self.assertEqual(rank_deficient["status"], "rank_deficient")
+        self.assertEqual(almost_collinear["status"], "rank_deficient")
+
+    def test_high_leverage_is_stopped_before_hc3_without_runtime_warning(self):
+        signal, future, prior = balanced_inputs()
+        leverage = np.repeat(3 / len(signal), len(signal)); leverage[-1] = 1.0
+        fake = FakeBaseFit(leverage)
+        with warnings.catch_warnings(record=True) as caught, patch("src.statistics._fit_base_ols", return_value=fake):
+            warnings.simplefilter("always")
+            result = controlled_regression(signal, future, prior)
+        self.assertEqual(result["status"], "high_leverage_unstable")
+        self.assertEqual(result["interpretation"], "無法判定")
+        self.assertFalse(fake.robust_called)
+        self.assertTrue(pd.isna(result["signal_p_value"]))
+        self.assertEqual(result["high_leverage_n"], 1)
+        self.assertFalse(any(issubclass(item.category, RuntimeWarning) for item in caught))
+
+    def test_hc3_nonfinite_is_retained_as_unestimable(self):
+        signal, future, prior = balanced_inputs()
+        robust = FakeRobustFit(se=np.inf, p=np.nan, covariance=np.full((3, 3), np.inf))
+        fake = FakeBaseFit(np.repeat(3 / len(signal), len(signal)), robust)
+        with patch("src.statistics._fit_base_ols", return_value=fake):
+            result = controlled_regression(signal, future, prior)
+        self.assertEqual(result["status"], "hc3_nonfinite")
+        self.assertTrue(pd.isna(result["signal_p_value"]))
+
+    def test_missing_data_reduces_effective_n_before_diagnostics(self):
+        signal, future, prior = balanced_inputs(50)
+        future.iloc[:15] = np.nan
+        result = controlled_regression(signal, future, prior, min_total_n=40, min_tail_n=1, min_control_n=1)
+        self.assertEqual(result["N"], 35)
+        self.assertEqual(result["status"], "insufficient_sample")
+
+    def test_controlled_diagnostics_summarize_failures_by_cell(self):
+        results = pd.DataFrame([
+            {"family": "a", "pr_group": "PR0-5", "prior_k": 1, "outcome_horizon": "O1_C1", "status": "estimated"},
+            {"family": "a", "pr_group": "PR0-5", "prior_k": 1, "outcome_horizon": "O1_C1", "status": "high_leverage_unstable"},
+        ])
+        diagnostics = controlled_regression_diagnostics(results)
+        overall = diagnostics[diagnostics["scope"].eq("overall")].iloc[0]
+        self.assertEqual(overall["total_models"], 2)
+        self.assertEqual(overall["estimated_models"], 1)
+        self.assertEqual(overall["high_leverage_unstable_models"], 1)
 
     def test_fdr_diagnostics_counts_only_inferential_rows(self):
         inferential = pd.DataFrame({
@@ -40,7 +167,7 @@ class StatisticsTests(unittest.TestCase):
         outcomes = pd.DataFrame({"O1_C1": np.arange(30, dtype=float)}, index=idx)
         calls = []
 
-        def capture(signal, future, prior):
+        def capture(signal, future, prior, **kwargs):
             calls.append(signal.copy())
             return {"N": 27, "signal_beta": 0.0, "signal_p_value": 1.0, "status": "estimated"}
 

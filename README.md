@@ -59,7 +59,7 @@ Run All 在統計前檢查 dataset coverage、融資/融券 accounting identity�
 
 這是事後敏感度分析：key_date 未證實為歷史公告日，不能據此宣稱停券資料在當時已可取得；起日前提前回補與歷史事件完整性仍有限制。dataset_coverage 的停券起訖指有效事件起日範圍，不是下載或公告時間。輸出 `suspension_events.csv`、`suspension_invalid_events.csv`、`suspension_validation_summary.csv` 與 `suspension_diagnostics.csv`，分別保存有效事件、原始 quarantine、Stage 0 coverage 限制與每日遮罩數。制度性停券與強制回補不得解讀為主動市場訊號。
 
-報酬計算使用 fill_method=None，缺值不自動補價；缺少 predictor 的日期不進對照組或控制迴歸。controlled_results.csv 的 status 區分 estimated、insufficient_sample、rank_deficient，跳過無法唯一估計的模型。以上修正會改變歷史統計及 FDR，舊結果需重跑；本研究尚未完成完整實證驗證。
+報酬計算使用 fill_method=None，缺值不自動補價；缺少 predictor 的日期不進對照組或控制迴歸。Controlled regression 保留 HC3，但只在總樣本、tail/control 組別、signal/prior variation、design rank/condition number 與 hat leverage 均通過後計算；兩組最低樣本沿用 `min_group_n=20`，condition number ≥ `1e12` 視為數值 rank-deficient，`max_leverage >= 1 - 1e-10` 時不進 HC3。這些數值門檻明列於 `ResearchConfig` 與 `run_info.txt`。status 區分 estimated、insufficient_sample、insufficient_group_sample、no_signal_variation、no_prior_variation、rank_deficient、high_leverage_unstable、hc3_nonfinite；只有 estimated 且 p-value finite 才可解讀，其餘均為「無法判定」。Primary/FDR 不受 controlled diagnostics 反向修改。
 
 ## Statistics、FDR 與 robustness
 
@@ -85,7 +85,7 @@ Colab 的 Python runtime 可能由平台升級；notebook 接受 Python 3.11 以
 
 ## Outputs 與追溯性
 
-每次建立 `outputs/YYYYMMDD_HHMMSS_<git_commit>/`，包含 `run_info.txt`、coverage/reconciliation/universe/feature catalog、level coverage、primary/FDR diagnostics、controlled low/high tails、七個 PR bins、annual summary、neighborhood、variant conflict、shape、universe sensitivity、`signal_summary.md`、`thermometer_signals.csv`、bias checklist 與可選 parquet。thermometer 的 `signal_date` 只取最新有效 0050 收盤日，不受未來 auxiliary/suspension event 日期影響。大型 outputs 不進 Git。`run_info.txt` 記錄 commit、branch、時間、Python/FinLab 版本、各資料起訖與研究設定。
+每次建立 `outputs/YYYYMMDD_HHMMSS_<git_commit>/`，包含 `run_info.txt`、coverage/reconciliation/universe/feature catalog、level coverage、primary/FDR diagnostics、controlled low/high tails、`controlled_regression_diagnostics.csv`、七個 PR bins、annual summary、neighborhood、variant conflict、shape、universe sensitivity、`signal_summary.md`、`thermometer_signals.csv`、bias checklist 與可選 parquet。controlled diagnostics 同時列出整體與 family × PR tail × prior k × outcome 的 status 分布。thermometer 的 `signal_date` 只取最新有效 0050 收盤日，不受未來 auxiliary/suspension event 日期影響。大型 outputs 不進 Git。`run_info.txt` 記錄 commit、branch、時間、Python/FinLab 版本、各資料起訖與研究設定。
 
 `thermometer_signals.csv` 保留未來接入 `taiwan-market-thermometer` 的 schema；本 repo 不修改該專案。
 

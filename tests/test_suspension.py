@@ -192,6 +192,7 @@ class SuspensionTests(unittest.TestCase):
         self.assertTrue(limitation)
 
     def test_rank_deficient_model_is_explicitly_skipped(self):
-        result = controlled_regression(pd.Series([0.0] * 30), pd.Series(range(30)), pd.Series(range(30)))
+        signal = pd.Series([0.0, 1.0] * 20)
+        result = controlled_regression(signal, pd.Series(range(40)), signal)
         self.assertEqual(result["status"], "rank_deficient")
         self.assertTrue(pd.isna(result["signal_p_value"]))

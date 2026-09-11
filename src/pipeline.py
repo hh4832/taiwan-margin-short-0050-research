@@ -13,7 +13,7 @@ from .diagnostics import aggregate_comparison, dataset_coverage, stabilize_recon
 from .features import adjusted_short_change, adjust_short_for_suspensions, build_feature_catalog, build_level_features, kday_change, level_feature_diagnostics, position_market_value, rolling_ratio, trailing_percentile
 from .outcomes import build_outcomes
 from .reporting import add_suspension_reporting_fields, assess_signals, create_run_directory, get_latest_tradable_signal_date, signal_summary, thermometer_table, write_run_info
-from .statistics import annual_results, annual_robustness_summary, classify_pr_shapes, neighborhood_consistency, regime_results, run_controlled_tests, run_pr_bin_descriptive, run_primary_tests, short_cover_variant_diagnostics
+from .statistics import annual_results, annual_robustness_summary, classify_pr_shapes, controlled_regression_diagnostics, neighborhood_consistency, regime_results, run_controlled_tests, run_pr_bin_descriptive, run_primary_tests, short_cover_variant_diagnostics
 from .universe import build_universe_diagnostics
 
 
@@ -172,7 +172,15 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
     fdr_diag = fdr_diagnostics(fdr)
     pr_bins = run_pr_bin_descriptive(features, outcomes)
     close_0050 = d["close"]["0050"]
-    controlled = run_controlled_tests(features, outcomes, close_0050)
+    controlled = run_controlled_tests(
+        features, outcomes, close_0050,
+        min_total_n=config.min_group_n,
+        min_tail_n=config.min_group_n,
+        min_control_n=config.min_group_n,
+        leverage_tolerance=config.controlled_leverage_tolerance,
+        max_condition_number=config.controlled_max_condition_number,
+    )
+    controlled_diagnostics = controlled_regression_diagnostics(controlled)
     annual_signal = annual_results(fdr, features, outcomes)
     annual_summary = annual_robustness_summary(
         annual_signal, config.robustness_min_years, config.robustness_max_year_sample_share,
@@ -218,7 +226,8 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         "suspension": suspension_diag, "suspension_validation": suspension_validation,
         "suspension_invalid_events": suspension_invalid, "features": features, "outcomes": outcomes,
         "level_feature_diagnostics": level_diagnostics, "primary": primary_report, "fdr": assessed,
-        "fdr_diagnostics": fdr_diag, "controlled": controlled_report, "pr_bins": pr_bins_report,
+        "fdr_diagnostics": fdr_diag, "controlled": controlled_report,
+        "controlled_diagnostics": controlled_diagnostics, "pr_bins": pr_bins_report,
         "annual": annual_report, "annual_robustness_summary": annual_summary,
         "neighborhood": neighborhood, "short_cover_variants": short_cover_variants,
         "variant_direction_consistency": variant_consistency, "shape_diagnostics": shapes,
@@ -252,6 +261,7 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         (run_dir / "signal_summary.md").write_text(signal_summary(assessed), encoding="utf-8")
         thermometer_table(assessed, latest_signal_date).to_csv(run_dir / "thermometer_signals.csv", index=False)
         controlled_report.to_csv(run_dir / "controlled_results.csv", index=False)
+        controlled_diagnostics.to_csv(run_dir / "controlled_regression_diagnostics.csv", index=False)
         features.join(outcomes).to_parquet(run_dir / "research_dataset.parquet")
         try: finlab_version = importlib.metadata.version("finlab")
         except importlib.metadata.PackageNotFoundError: finlab_version = "unknown"

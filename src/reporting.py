@@ -15,6 +15,7 @@ OUTPUT_NAMES = [
     "dataset_coverage.csv", "reconciliation_summary.csv", "universe_diagnostics.csv",
     "feature_catalog.csv", "level_feature_diagnostics.csv", "primary_results.csv",
     "fdr_results.csv", "fdr_diagnostics.csv", "controlled_results.csv",
+    "controlled_regression_diagnostics.csv",
     "pr_bin_results.csv", "annual_results.csv", "annual_robustness_summary.csv",
     "neighborhood_consistency.csv", "short_cover_variant_results.csv",
     "variant_direction_consistency.csv", "shape_diagnostics.csv",
@@ -53,6 +54,11 @@ def write_run_info(path: Path, config, coverage: pd.DataFrame, finlab_version="u
         "robustness_min_direction_ratio": config.robustness_min_direction_ratio,
         "robustness_min_neighborhood_score": config.robustness_min_neighborhood_score,
         "robustness_max_year_sample_share": config.robustness_max_year_sample_share,
+        "controlled_min_total_n": config.min_group_n,
+        "controlled_min_tail_n": config.min_group_n,
+        "controlled_min_control_n": config.min_group_n,
+        "controlled_leverage_tolerance": config.controlled_leverage_tolerance,
+        "controlled_max_condition_number": config.controlled_max_condition_number,
         "primary_universe": config.primary_universe,
     }
     for dataset, prefix in [("open", "0050_price"), ("margin_balance", "margin_transactions"), ("aggregate_balance", "margin_balance"), ("market_amount", "market_transaction_info"), ("market_value", "market_value"), ("short_suspension", "short_suspension")]:
@@ -129,7 +135,8 @@ def assess_signals(
         keys = ["k", "rolling_window", "pr_group", "outcome_horizon"]
         out = out.merge(variant_consistency[keys + ["conflict_flag"]], on=keys, how="left")
         is_cover = out["family"].eq("short_cover")
-        out.loc[is_cover, "variant_conflict_flag"] = out.loc[is_cover, "conflict_flag"].fillna(False).astype(bool)
+        conflict_values = out.loc[is_cover, "conflict_flag"].astype("boolean").fillna(False).astype(bool)
+        out.loc[is_cover, "variant_conflict_flag"] = conflict_values
         out = out.drop(columns="conflict_flag")
 
     out["shape_classification"] = pd.NA
@@ -138,11 +145,12 @@ def assess_signals(
         out = out.merge(shape_diagnostics[shape_keys + ["shape_classification"]], on=shape_keys, how="left", suffixes=("", "_new"))
         out["shape_classification"] = out.pop("shape_classification_new").combine_first(out["shape_classification"])
 
-    enough = out["years_with_samples"].fillna(0).ge(min_years)
+    years_with_samples = pd.to_numeric(out["years_with_samples"], errors="coerce")
+    enough = years_with_samples.fillna(0).ge(min_years)
     annual_ok = pd.to_numeric(out["annual_direction_ratio"], errors="coerce").ge(min_direction_ratio)
     neighborhood_ok = pd.to_numeric(out["neighborhood_consistency_score"], errors="coerce").ge(min_neighborhood_score)
-    concentration = out["few_year_concentration_flag"].fillna(True).astype(bool)
-    conflict = out["variant_conflict_flag"].fillna(False).astype(bool)
+    concentration = out["few_year_concentration_flag"].astype("boolean").fillna(True).astype(bool)
+    conflict = out["variant_conflict_flag"].astype("boolean").fillna(False).astype(bool)
     robust = enough & annual_ok & neighborhood_ok & ~concentration & ~conflict
     non_directional_shape = out["shape_classification"].isin(["U_shape", "inverted_U", "mixed"])
     robust &= ~non_directional_shape

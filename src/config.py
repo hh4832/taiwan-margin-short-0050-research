@@ -16,6 +16,8 @@ class ResearchConfig:
     reconciliation_tolerance: float = 1e-9
     min_reconciliation_ratio: float = 0.99999
     min_group_n: int = 20
+    controlled_leverage_tolerance: float = 1e-10
+    controlled_max_condition_number: float = 1e12
     robustness_min_years: int = 3
     robustness_min_direction_ratio: float = 0.60
     robustness_min_neighborhood_score: float = 0.60

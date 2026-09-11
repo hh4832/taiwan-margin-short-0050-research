@@ -1,4 +1,5 @@
 import unittest
+import warnings
 
 import pandas as pd
 
@@ -58,6 +59,28 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(assessed.iloc[0]["research_decision"], "修改後再測")
         text = signal_summary(assessed)
         self.assertIn("robustness=insufficient", text)
+
+    def test_nullable_concentration_flag_has_explicit_boolean_handling(self):
+        results = result_rows().iloc[[0]]
+        row = results.iloc[0]
+        annual = pd.DataFrame([{
+            "predictor": row.predictor, "family": row.family, "k": row.k,
+            "rolling_window": row.rolling_window, "pr_group": row.pr_group,
+            "outcome_horizon": row.outcome_horizon, "years_with_samples": 4,
+            "positive_year_ratio": .75, "largest_year_sample_share": .3,
+            "few_year_concentration_flag": None,
+        }])
+        neighborhood = pd.DataFrame([{
+            "family": row.family, "pr_group": row.pr_group,
+            "consistency_type": "fixed_horizon", "fixed_parameter": row.outcome_horizon,
+            "consistency_score": .8,
+        }])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            assessed = assess_signals(results, annual, neighborhood)
+        self.assertEqual(str(annual["few_year_concentration_flag"].astype("boolean").dtype), "boolean")
+        self.assertEqual(assessed.iloc[0]["robustness_status"], "mixed")
+        self.assertEqual(assessed.iloc[0]["research_decision"], "修改後再測")
 
 
 if __name__ == "__main__":
