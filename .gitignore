@@ -8,5 +8,7 @@ __pycache__/
 service_account.json
 outputs/*
 !outputs/.gitkeep
+outputs_turnover/*
+!outputs_turnover/.gitkeep
 .ipynb_checkpoints/
 .DS_Store

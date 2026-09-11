@@ -110,3 +110,38 @@ python -m unittest discover -s tests -v
 ```
 
 沒有實際 FinLab credential/data 的測試只驗證 accounting、日期對齊、公式與防止 future leakage；不代表已完成實證研究。
+
+## Margin Turnover incremental branch
+
+`research/margin-turnover` 將既有 `8a2c44efbe29149e43e9e2b808c204697b472d6a`
+研究視為 frozen baseline，只新增一個 economic variable：`margin_buy + margin_sell`。
+獨立入口是 `src.margin_turnover.run_margin_turnover_study()`；它不呼叫
+`src.pipeline.run()`，也不重算原本 4,884 個 tests、short/level/suspension、完整年度、
+neighborhood、universe sensitivity 或 thermometer export。
+
+三個 variant 使用同一組 k=1/3/5/10、rolling window=126/252/504/756 與固定 PR bins：
+
+- `amount_ratio`：融資買進金額＋融資賣出金額 ÷ TAIEX＋OTC 成交金額，是 primary normalized version。
+- `volume_ratio`：primary-universe 融資買進／賣出張數乘 1000 ÷ TAIEX＋OTC 成交股數，是 robustness。
+- `raw_lots`：primary-universe 融資買進＋賣出張數，是 diagnostics/robustness。
+
+k-day ratios 都是 ratio of rolling sums，缺值不 forward-fill，percentile 沿用既有
+`trailing_percentile()`。Turnover inferential universe 最大 576 cells，BH-FDR scope 固定為
+`margin_turnover_incremental_study`。因此本 branch 的 Level A 只代表 turnover incremental
+experiment global FDR，不是 baseline 4,884 tests 與 turnover 合併後的 global FDR。
+
+Absorption test 只讀 frozen `fdr_results.csv` 中 retained margin_buy/margin_sell 訊號。
+Primary control 是相同 k/window 的 continuous `amount_ratio percentile / 100`，volume ratio
+只作 robustness。HC3 前沿用總樣本、tail/control 樣本、variation、rank、condition number、
+leverage 與 finite covariance safeguards。`attenuation_ratio = 1 - |beta_after|/|beta_before|`
+是 primary continuous quantity；beta before 接近 0 時保持 undefined。分類僅作 descriptive：
+
+- `survives_turnover_control`：方向相同、至少保留 70% beta，且 after p<0.05。
+- `partially_absorbed`：方向相同且 attenuation 介於 30%–70%。
+- `largely_absorbed`：attenuation >70% 或 after 明顯失去顯著性。
+- `sign_reversal`、`unstable_collinearity`、`insufficient_sample`：分別標記反轉、數值不穩及樣本不足。
+
+Colab 使用 `notebooks/margin_turnover_incremental_colab.ipynb`，必須明確設定
+`BASELINE_RUN_DIR`。該資料夾必須包含 baseline 的 run info、FDR、controlled、annual 與
+neighborhood outputs，且 `run_info.txt` 的完整 git commit 必須等於指定 baseline，否則停止。
+增量結果輸出到 `outputs_turnover/<timestamp>_<commit>_margin_turnover_incremental/`，不覆寫 baseline。
