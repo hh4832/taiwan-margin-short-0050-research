@@ -1,6 +1,6 @@
 import pandas as pd
 import unittest
-from src.diagnostics import run_reconciliation, stabilize_reconciliation
+from src.diagnostics import reconciliation, run_reconciliation, stabilize_reconciliation
 
 
 def frames():
@@ -10,6 +10,27 @@ def frames():
 
 
 class ReconciliationTests(unittest.TestCase):
+    def test_missing_pairs_are_not_mismatches(self):
+        left = pd.DataFrame({"2330": [0.0, float("nan"), 0.0]})
+        right = pd.DataFrame({"2330": [0.0, 0.0, float("nan")]})
+        result = reconciliation(left, right, "margin")
+        self.assertEqual(result["n"], 1)
+        self.assertEqual(result["mismatch_n"], 0)
+        self.assertEqual(result["exact_match_ratio"], 1.0)
+
+    def test_all_missing_is_not_a_pass(self):
+        frame = pd.DataFrame({"2330": [float("nan")]})
+        with self.assertRaisesRegex(ValueError, "no comparable"):
+            reconciliation(frame, frame, "margin")
+
+    def test_real_mismatch_with_missing_pairs_is_detected(self):
+        left = pd.DataFrame({"2330": [0.0, 1.0, float("nan")]})
+        right = pd.DataFrame({"2330": [0.0, 0.0, float("nan")]})
+        result = reconciliation(left, right, "margin")
+        self.assertEqual(result["n"], 2)
+        self.assertEqual(result["mismatch_n"], 1)
+        self.assertEqual(result["exact_match_ratio"], 0.5)
+
     def test_accounting_identities_pass(self):
         result = run_reconciliation(frames(), 0, 1)
         self.assertTrue((result.exact_match_ratio == 1).all())

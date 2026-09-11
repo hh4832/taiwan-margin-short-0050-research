@@ -25,7 +25,9 @@ def dataset_coverage(datasets: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
 def reconciliation_errors(lhs: pd.DataFrame, rhs: pd.DataFrame, name: str) -> pd.Series:
     left, right = lhs.align(rhs, join="inner", axis=None)
     valid = left.notna() & right.notna()
-    error = (left - right).where(valid).stack(future_stack=True).abs()
+    # future_stack retains NaNs; they are not failed accounting identities.
+    # Only pairs with both sides present belong in the match denominator.
+    error = (left - right).where(valid).stack(future_stack=True).dropna().abs()
     if error.empty:
         raise ValueError(f"{name}: no comparable observations")
     error.index = error.index.set_names(["date", "symbol"])
