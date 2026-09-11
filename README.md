@@ -55,7 +55,11 @@ Run All 在統計前檢查 dataset coverage、融資/融券 accounting identity�
 
 ## 停券處理
 
-融券同時保留 raw 與 adjusted signals。調整只在個股層級先遮罩 dataset 明確指出的最後回補日，再 aggregate；不猜測完整停券區間。若資料不足，報告會保留 limitation。極端訊號若集中在停券事件，必須標記。
+融券同時保留 raw 與 adjusted signals。停券表按事件讀取，以 symbol、停券起日(最後回補日)、停券迄日對應個股；起訖日均包含，僅遮罩既有交易日。缺少迄日只遮罩起日，不推測區間。餘額變化以前後同一組股票計算，排除整個比較窗口內受停券影響者，避免遮罩進出造成假變化。
+
+這是事後敏感度分析：key_date 未證實為歷史公告日，不能據此宣稱停券資料在當時已可取得；起日前提前回補與歷史事件完整性仍有限制。dataset_coverage 的停券起訖指事件起日範圍，不是下載或公告時間。輸出 suspension_events.csv 與 suspension_diagnostics.csv 可核對原始事件及每日遮罩數。
+
+報酬計算使用 fill_method=None，缺值不自動補價；缺少 predictor 的日期不進對照組或控制迴歸。controlled_results.csv 的 status 區分 estimated、insufficient_sample、rank_deficient，跳過無法唯一估計的模型。以上修正會改變歷史統計及 FDR，舊結果需重跑；本研究尚未完成完整實證驗證。
 
 ## Statistics、FDR 與 robustness
 

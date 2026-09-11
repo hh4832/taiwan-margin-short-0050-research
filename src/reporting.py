@@ -36,6 +36,8 @@ def write_run_info(path: Path, config, coverage: pd.DataFrame, finlab_version="u
         "git_commit": git_value(["rev-parse", "HEAD"]),
         "run_timestamp": datetime.now(ZoneInfo(config.timezone)).isoformat(), "timezone": config.timezone,
         "python_version": platform.python_version(), "finlab_version": finlab_version,
+        "suspension_analysis": "retrospective sensitivity; explicit start/end inclusive; missing end=start",
+        "suspension_publication_time_verified": False,
         "rolling_windows": config.rolling_windows, "k_values": config.k_values,
         "pr_groups": config.pr_edges, "outcome_horizons": config.outcome_horizons,
         "primary_universe": config.primary_universe,

@@ -34,22 +34,26 @@ def position_market_value(balance_lots: pd.DataFrame, close: pd.DataFrame, symbo
 
 
 def adjust_short_for_suspensions(frames: dict[str, pd.DataFrame], suspension: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
-    """Mask known final-cover dates only; never infer an unobserved suspension interval."""
+    """Mask observed event intervals inclusively on the existing trading calendar."""
     affected = pd.DataFrame(False, index=frames["short_balance"].index, columns=frames["short_balance"].columns)
-    if isinstance(suspension, pd.DataFrame):
-        if set(suspension.columns) & set(affected.columns):
-            marker = suspension.reindex(index=affected.index, columns=affected.columns).notna()
-            affected |= marker
-        else:
-            for dt in suspension.index.intersection(affected.index):
-                values = suspension.loc[dt].dropna().astype(str)
-                for symbol in values:
-                    if symbol in affected.columns:
-                        affected.loc[dt, symbol] = True
+    for symbol, start, end in suspension[["symbol", "停券起日(最後回補日)", "停券迄日"]].itertuples(index=False, name=None):
+        if symbol in affected.columns:
+            end = start if pd.isna(end) else end
+            affected.loc[(affected.index >= start) & (affected.index <= end), symbol] = True
     adjusted = {}
     for key in ("short_sell", "short_cover", "short_stock_repayment", "short_balance"):
         adjusted[key] = frames[key].mask(affected)
     return adjusted, affected
+
+
+def adjusted_short_change(balance: pd.DataFrame, affected: pd.DataFrame, k: int) -> pd.Series:
+    """Use the same eligible securities at both endpoints to avoid mask turnover."""
+    eligible = affected.astype(int).rolling(k + 1, min_periods=k + 1).sum().eq(0)
+    previous = balance.shift(k)
+    eligible &= balance.notna() & previous.notna()
+    now = balance.where(eligible).sum(axis=1, min_count=1)
+    before = previous.where(eligible).sum(axis=1, min_count=1)
+    return now / before.replace(0, np.nan) - 1
 
 
 def build_feature_catalog() -> pd.DataFrame:

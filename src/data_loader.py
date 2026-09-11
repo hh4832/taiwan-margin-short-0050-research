@@ -42,11 +42,32 @@ def load_finlab_data(provider=None) -> dict[str, pd.DataFrame]:
     loaded: dict[str, pd.DataFrame] = {}
     for alias, field in FINLAB_FIELDS.items():
         try:
-            loaded[alias] = _as_datetime_frame(provider.get(field), field)
+            raw = provider.get(field)
+            loaded[alias] = parse_suspension_events(raw) if alias == "short_suspension" else _as_datetime_frame(raw, field)
         except Exception as exc:
             raise RuntimeError(f"Failed loading exact FinLab dataset {field!r}") from exc
     validate_required_columns(loaded)
     return loaded
+
+
+def parse_suspension_events(value: pd.DataFrame) -> pd.DataFrame:
+    """Preserve event rows; event dates are columns, never RangeIndex."""
+    required = {"symbol", "停券起日(最後回補日)", "停券迄日"}
+    if not required.issubset(value.columns):
+        raise ValueError(f"Suspension event columns missing: {required - set(value.columns)}")
+    frame = NativeDataFrame({c: value[c].to_numpy(copy=True) for c in value.columns})
+    frame["symbol"] = frame["symbol"].astype("string").str.strip()
+    if frame["symbol"].isna().any() or frame["symbol"].eq("").any():
+        raise ValueError("Suspension event has missing symbol")
+    for col in ("停券起日(最後回補日)", "停券迄日"):
+        frame[col] = pd.to_datetime(frame[col], errors="raise").dt.normalize()
+    start, end = frame["停券起日(最後回補日)"], frame["停券迄日"]
+    if start.isna().any() or (end.notna() & end.lt(start)).any():
+        raise ValueError("Suspension event has missing start or end before start")
+    # Duplicate dates across symbols/events are legitimate.
+    frame.index = pd.DatetimeIndex(start, name="event_date")
+    frame.attrs["limitation"] = "Retrospective sensitivity; key_date is not a verified historical announcement date."
+    return frame.sort_index()
 
 
 def validate_required_columns(datasets: Mapping[str, pd.DataFrame]) -> None:

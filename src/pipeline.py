@@ -11,7 +11,7 @@ from .config import ResearchConfig
 from .data_loader import load_finlab_data
 from .diagnostics import aggregate_comparison, dataset_coverage, stabilize_reconciliation
 from .fdr import apply_fdr
-from .features import adjust_short_for_suspensions, build_feature_catalog, kday_change, position_market_value, rolling_ratio, trailing_percentile
+from .features import adjusted_short_change, adjust_short_for_suspensions, build_feature_catalog, kday_change, position_market_value, rolling_ratio, trailing_percentile
 from .outcomes import build_outcomes
 from .reporting import create_run_directory, signal_summary, thermometer_table, write_run_info
 from .statistics import annual_results, neighborhood_consistency, regime_results, run_controlled_tests, run_primary_tests
@@ -62,13 +62,14 @@ def _build_base_series(d: dict[str, pd.DataFrame], primary_symbols: set[str]) ->
     suspension_diag = pd.DataFrame({
         "date": suspension_mask.index,
         "affected_security_count": suspension_mask.sum(axis=1).to_numpy(),
-        "limitation": "Only observed final-cover dates are masked; full suspension intervals are not inferred.",
+        "limitation": "Retrospective sensitivity: observed start/end inclusive; missing end uses start only. key_date is not verified publication time; pre-start covering and historical completeness remain unknown.",
     })
     return series, suspension_diag
 
 
 def build_features(d: dict[str, pd.DataFrame], primary_symbols: set[str], config: ResearchConfig) -> pd.DataFrame:
     s, _ = _build_base_series(d, primary_symbols)
+    _, affected = adjust_short_for_suspensions(d, d["short_suspension"])
     values: dict[str, pd.Series] = {}
     catalog: dict[str, dict] = {}
     flow_families = ["margin_buy", "margin_sell", "margin_cash_repayment", "short_sell", "short_cover", "short_repayment"]
@@ -92,6 +93,8 @@ def build_features(d: dict[str, pd.DataFrame], primary_symbols: set[str], config
     for family in ("margin_balance", "short_balance", "short_balance_adjusted", "approx_margin_maintenance"):
         for k in config.k_values:
             base = kday_change(s[family], k)
+            if family == "short_balance_adjusted":
+                base = adjusted_short_change(d["short_balance"], affected, k)
             for window in config.rolling_windows:
                 col = f"{family}_change__k{k}__w{window}_percentile"
                 values[col] = trailing_percentile(base, window)
@@ -141,6 +144,8 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         coverage.to_csv(run_dir / "dataset_coverage.csv", index=False)
         reconciliation.to_csv(run_dir / "reconciliation_summary.csv", index=False)
         universe_diag.to_csv(run_dir / "universe_diagnostics.csv", index=False)
+        suspension_diag.to_csv(run_dir / "suspension_diagnostics.csv", index=False)
+        d["short_suspension"].to_csv(run_dir / "suspension_events.csv", index=False)
         build_feature_catalog().to_csv(run_dir / "feature_catalog.csv", index=False)
         primary.to_csv(run_dir / "primary_results.csv", index=False)
         fdr.to_csv(run_dir / "fdr_results.csv", index=False)

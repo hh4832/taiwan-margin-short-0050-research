@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from scipy import stats
-import statsmodels.api as sm
 
 
 def compare_group(values: pd.Series, selected: pd.Series) -> dict:
@@ -28,27 +27,32 @@ def run_primary_tests(features: pd.DataFrame, outcomes: pd.DataFrame) -> pd.Data
         meta = features.attrs.get("catalog", {}).get(feature, {})
         for label, selected in {"PR0-5": joined[feature] <= 5, "PR95-100": joined[feature] >= 95}.items():
             for outcome in outcome_cols:
-                result = compare_group(joined[outcome], selected)
+                result = compare_group(joined[outcome].where(joined[feature].notna()), selected)
                 rows.append({"predictor": feature, "family": meta.get("family", feature.split("__")[0]), "k": meta.get("k"), "rolling_window": meta.get("window"), "pr_group": label, "outcome_horizon": outcome, **result})
     return pd.DataFrame(rows)
 
 
 def controlled_regression(signal: pd.Series, future: pd.Series, prior_return: pd.Series) -> dict:
-    frame = pd.concat({"future": future, "signal": signal, "prior": prior_return}, axis=1).dropna()
+    frame = pd.concat({"future": future, "signal": signal, "prior": prior_return}, axis=1).replace([np.inf, -np.inf], np.nan).dropna()
     if len(frame) < 20:
-        return {"N": len(frame), "signal_beta": np.nan, "signal_p_value": np.nan}
-    fit = sm.OLS(frame["future"], sm.add_constant(frame[["signal", "prior"]])).fit(cov_type="HC3")
-    return {"N": len(frame), "signal_beta": fit.params["signal"], "signal_p_value": fit.pvalues["signal"]}
+        return {"N": len(frame), "signal_beta": np.nan, "signal_p_value": np.nan, "status": "insufficient_sample"}
+    design = np.column_stack([np.ones(len(frame)), frame[["signal", "prior"]].to_numpy()])
+    if np.linalg.matrix_rank(design) < design.shape[1]:
+        return {"N": len(frame), "signal_beta": np.nan, "signal_p_value": np.nan, "status": "rank_deficient"}
+    import statsmodels.api as sm
+    fit = sm.OLS(frame["future"], pd.DataFrame(design, index=frame.index, columns=["const", "signal", "prior"])).fit(cov_type="HC3")
+    return {"N": len(frame), "signal_beta": fit.params["signal"], "signal_p_value": fit.pvalues["signal"], "status": "estimated"}
 
 
 def run_controlled_tests(features: pd.DataFrame, outcomes: pd.DataFrame, close: pd.Series) -> pd.DataFrame:
     rows = []
     joined = features.join(outcomes, how="inner")
+    priors = {k: close.pct_change(k, fill_method=None).reindex(joined.index) for k in (1, 3, 5, 10)}
     for feature in [c for c in features if c.endswith("_percentile")]:
         meta = features.attrs.get("catalog", {}).get(feature, {})
-        extreme = ((joined[feature] <= 5) | (joined[feature] >= 95)).astype(float)
+        extreme = ((joined[feature] <= 5) | (joined[feature] >= 95)).astype(float).where(joined[feature].notna())
         for prior_k in (1, 3, 5, 10):
-            prior = close.pct_change(prior_k).reindex(joined.index)
+            prior = priors[prior_k]
             for outcome in [c for c in outcomes if c.startswith("O1_C")]:
                 fit = controlled_regression(extreme, joined[outcome], prior)
                 rows.append({"predictor": feature, "family": meta.get("family"), "prior_k": prior_k, "outcome_horizon": outcome, **fit})
@@ -72,10 +76,12 @@ def regime_results(results: pd.DataFrame, features: pd.DataFrame, outcomes: pd.D
     candidates = results.nsmallest(min(30, len(results)), "raw_p_value") if len(results) else results
     joined = features.join(outcomes, how="inner")
     trend = close / close.rolling(252, min_periods=252).mean() - 1
-    vol = close.pct_change().rolling(60, min_periods=60).std()
+    vol = close.pct_change(fill_method=None).rolling(60, min_periods=60).std()
     regime = pd.Series("sideways", index=close.index)
     regime[trend > 0.05] = "bull"; regime[trend < -0.05] = "bear"
+    regime = regime.where(trend.notna())
     vol_regime = pd.Series(np.where(vol >= vol.rolling(252, min_periods=126).median(), "high_vol", "low_vol"), index=close.index)
+    vol_regime = vol_regime.where(vol.notna() & vol.rolling(252, min_periods=126).median().notna())
     rows = []
     for r in candidates.itertuples():
         selected = joined[r.predictor].le(5) if r.pr_group == "PR0-5" else joined[r.predictor].ge(95)
