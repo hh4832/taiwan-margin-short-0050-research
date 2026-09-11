@@ -45,7 +45,7 @@ def load_finlab_data(provider=None) -> dict[str, pd.DataFrame]:
             raw = provider.get(field)
             loaded[alias] = parse_suspension_events(raw) if alias == "short_suspension" else _as_datetime_frame(raw, field)
         except Exception as exc:
-            raise RuntimeError(f"Failed loading exact FinLab dataset {field!r}") from exc
+            raise RuntimeError(f"Failed loading exact FinLab dataset {field!r}: {exc}") from exc
     validate_required_columns(loaded)
     return loaded
 
@@ -62,8 +62,31 @@ def parse_suspension_events(value: pd.DataFrame) -> pd.DataFrame:
     for col in ("停券起日(最後回補日)", "停券迄日"):
         frame[col] = pd.to_datetime(frame[col], errors="raise").dt.normalize()
     start, end = frame["停券起日(最後回補日)"], frame["停券迄日"]
-    if start.isna().any() or (end.notna() & end.lt(start)).any():
-        raise ValueError("Suspension event has missing start or end before start")
+    missing_start = start.isna()
+    reversed_interval = end.notna() & end.lt(start)
+    invalid = missing_start | reversed_interval
+    if invalid.any():
+        # Keep source positions and raw values so provider anomalies can be
+        # reviewed without guessing dates or silently dropping events.
+        details = NativeDataFrame({
+            "source_row": range(len(value)),
+            **{c: value[c].to_numpy(copy=True) for c in value.columns},
+        }).loc[invalid].copy()
+        details["validation_error"] = [
+            "missing_start" if missing else "end_before_start"
+            for missing in missing_start.loc[invalid]
+        ]
+        error = ValueError(
+            "Suspension event validation failed: "
+            f"total_rows={len(frame)}, invalid_rows={int(invalid.sum())}, "
+            f"missing_start={int(missing_start.sum())}, "
+            f"end_before_start={int(reversed_interval.sum())}.\n"
+            "No event dates were inferred or silently discarded. "
+            "First 20 invalid rows (all rows available as exception.invalid_events):\n"
+            + details.head(20).to_string(index=False)
+        )
+        error.invalid_events = details
+        raise error
     # Duplicate dates across symbols/events are legitimate.
     frame.index = pd.DatetimeIndex(start, name="event_date")
     frame.attrs["limitation"] = "Retrospective sensitivity; key_date is not a verified historical announcement date."

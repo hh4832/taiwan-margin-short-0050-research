@@ -40,6 +40,23 @@ class SuspensionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_suspension_events(pd.DataFrame({"symbol": ["0050"], "停券起日(最後回補日)": ["2026-09-07"], "停券迄日": ["2026-09-04"]}))
 
+    def test_invalid_rows_include_raw_values_and_positions(self):
+        raw = pd.DataFrame({
+            "symbol": ["0050", "2330", "1101"],
+            "停券起日(最後回補日)": ["2026-09-07", None, "2026-09-01"],
+            "停券迄日": ["2026-09-04", "2026-09-08", None],
+            "原因": ["除息", "股東常會", "除息"],
+        })
+        with self.assertRaises(ValueError) as caught:
+            parse_suspension_events(raw)
+        error = caught.exception
+        self.assertIn("invalid_rows=2", str(error))
+        self.assertIn("missing_start=1", str(error))
+        self.assertIn("end_before_start=1", str(error))
+        self.assertEqual(error.invalid_events["source_row"].tolist(), [0, 1])
+        self.assertEqual(error.invalid_events["symbol"].tolist(), ["0050", "2330"])
+        self.assertEqual(raw.iloc[0]["停券起日(最後回補日)"], "2026-09-07")
+
     def test_universe_counts_etfs_outside_intersection(self):
         diag, _, _ = build_universe_diagnostics(pd.DataFrame(columns=["2330", "0050"]), pd.DataFrame(columns=["2330"]))
         self.assertEqual(diag.set_index("category").loc["excluded_etf_like_or_non_common", "count"], 1)
