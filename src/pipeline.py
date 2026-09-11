@@ -9,7 +9,7 @@ import pandas as pd
 
 from .config import ResearchConfig
 from .data_loader import load_finlab_data
-from .diagnostics import aggregate_comparison, dataset_coverage, run_reconciliation
+from .diagnostics import aggregate_comparison, dataset_coverage, stabilize_reconciliation
 from .fdr import apply_fdr
 from .features import adjust_short_for_suspensions, build_feature_catalog, kday_change, position_market_value, rolling_ratio, trailing_percentile
 from .outcomes import build_outcomes
@@ -110,7 +110,7 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
     config = config or ResearchConfig()
     d = load_finlab_data(provider)
     coverage = dataset_coverage(d)
-    reconciliation = run_reconciliation(d, config.reconciliation_tolerance, config.min_reconciliation_ratio)
+    d, reconciliation = stabilize_reconciliation(d, config.reconciliation_tolerance, config.min_reconciliation_ratio)
     universe_diag, primary_symbols, universe_limitation = build_universe_diagnostics(d["margin_balance"], d["market_value"])
     universe_diag = pd.concat([universe_diag, pd.DataFrame([{"category": "UNIVERSE_LIMITATION", "count": int(universe_limitation), "symbols": "Ticker pattern is not a point-in-time security master; raw all-security sensitivity must be retained."}])], ignore_index=True)
     base, suspension_diag = _build_base_series(d, primary_symbols)
