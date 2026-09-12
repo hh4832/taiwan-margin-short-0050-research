@@ -37,7 +37,7 @@ from .statistics import (
 from .universe import build_universe_diagnostics
 
 
-TURNOVER_BASE_COMMIT = "efe16a16b16d634667df792a6cf51c52b8ca9de3"
+TURNOVER_BASE_COMMIT = "e613b5e7176c998bd1e8abe191f0e7a4caf2abd3"
 FDR_SCOPE = "margin_composition_incremental_study"
 REQUIRED_TURNOVER_FILES = (
     "run_info_turnover.txt",
