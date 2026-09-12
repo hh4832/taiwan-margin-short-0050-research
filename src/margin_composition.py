@@ -24,6 +24,7 @@ from .margin_turnover import (
     margin_turnover_variant_series,
 )
 from .outcomes import build_outcomes
+from .price_validation import validate_split_window
 from .statistics import (
     _fit_base_ols,
     annual_results,
@@ -36,7 +37,7 @@ from .statistics import (
 from .universe import build_universe_diagnostics
 
 
-TURNOVER_BASE_COMMIT = "08b519686c42a209374d98fe84d0c36c634324f7"
+TURNOVER_BASE_COMMIT = "efe16a16b16d634667df792a6cf51c52b8ca9de3"
 FDR_SCOPE = "margin_composition_incremental_study"
 REQUIRED_TURNOVER_FILES = (
     "run_info_turnover.txt",
@@ -609,7 +610,7 @@ def run_composition_absorption(
 def _create_run_directory(config: MarginCompositionConfig) -> Path:
     short = _git_value(["rev-parse", "--short", "HEAD"])
     stamp = datetime.now(ZoneInfo(config.timezone)).strftime("%Y%m%d_%H%M%S")
-    path = config.output_root / f"{stamp}_{short}_margin_composition_incremental"
+    path = config.output_root / f"{stamp}_{short}_margin_composition_adjusted"
     path.mkdir(parents=True, exist_ok=False)
     return path
 
@@ -631,6 +632,10 @@ def _write_run_info(
         "run_timestamp": datetime.now(ZoneInfo(config.timezone)).isoformat(),
         "timezone": config.timezone, "python_version": platform.python_version(),
         "finlab_version": finlab_version, "study": "margin_composition_incremental",
+        "price_source_open": "etl:adj_open", "price_source_close": "etl:adj_close",
+        "outcome_price_adjusted": True, "corporate_action_fix": "0050_split_2025_06",
+        "previous_composition_commit": "4067347b10cbf98e89fcd4bcd29799c1132fe171",
+        "previous_composition_output": "/content/drive/MyDrive/Quant_Research/taiwan-margin-short-0050-research/margin_composition/20260912_164123_4067347_margin_composition_incremental",
         "primary_variable": "buy_share", "derived_variable": "imbalance",
         "k_values": config.k_values, "rolling_windows": config.rolling_windows,
         "pr_bins": config.pr_edges, "outcome_horizons": config.outcome_horizons,
@@ -694,6 +699,9 @@ def run_margin_composition_study(
     universe, primary_symbols, limitation = build_universe_diagnostics(data["margin_balance"], data["market_value"])
     features, catalog, equivalence = build_margin_composition_features(data, config)
     outcomes = build_outcomes(data["open"][config.target_symbol], data["close"][config.target_symbol], config.outcome_horizons)
+    price_diagnostics = validate_split_window(
+        data["open"][config.target_symbol], data["close"][config.target_symbol], outcomes
+    )
     primary, fdr, fdr_diag = run_composition_primary(features, outcomes)
     pr_bins = classify_composition_dose_response(
         _attach_variant(run_pr_bin_descriptive(features, outcomes))
@@ -737,6 +745,7 @@ def run_margin_composition_study(
         "UNIVERSE_LIMITATION": limitation, "features": features,
         "feature_catalog": catalog, "equivalence_validation": equivalence,
         "outcomes": outcomes, "primary": primary, "fdr": fdr,
+        "outcome_price_diagnostics": price_diagnostics,
         "fdr_diagnostics": fdr_diag, "pr_bins": pr_bins, "controlled": controlled,
         "annual": annual, "annual_robustness_summary": annual_summary,
         "neighborhood": neighborhood, "low_turnover_composition": low,
@@ -764,6 +773,7 @@ def run_margin_composition_study(
             "low_turnover_year_contribution.csv": contribution,
             "low_turnover_event_clusters.csv": clusters,
             "composition_absorption_results.csv": absorption,
+            "outcome_price_diagnostics.csv": price_diagnostics,
         }
         for filename, frame in outputs.items():
             frame.to_csv(run_dir / filename, index=False)

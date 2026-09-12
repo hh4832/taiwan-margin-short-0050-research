@@ -16,6 +16,7 @@ from .data_loader import _as_datetime_frame
 from .fdr import apply_fdr, fdr_diagnostics
 from .features import pr_group, rolling_ratio, trailing_percentile
 from .outcomes import build_outcomes
+from .price_validation import validate_split_window
 from .statistics import (
     _fit_base_ols,
     annual_results,
@@ -29,7 +30,7 @@ from .statistics import (
 from .universe import build_universe_diagnostics
 
 
-BASELINE_COMMIT = "8a2c44efbe29149e43e9e2b808c204697b472d6a"
+BASELINE_COMMIT = "1a7c39bafef5d4affc40975b08fdffe52f1d5fe6"
 FDR_SCOPE = "margin_turnover_incremental_study"
 TURNOVER_VARIANTS = ("raw_lots", "volume_ratio", "amount_ratio")
 REQUIRED_BASELINE_FILES = (
@@ -511,7 +512,7 @@ def run_turnover_absorption(
 def _create_run_directory(config: MarginTurnoverConfig) -> Path:
     commit = _git_value(["rev-parse", "--short", "HEAD"])
     stamp = datetime.now(ZoneInfo(config.timezone)).strftime("%Y%m%d_%H%M%S")
-    path = config.output_root / f"{stamp}_{commit}_margin_turnover_incremental"
+    path = config.output_root / f"{stamp}_{commit}_margin_turnover_adjusted"
     path.mkdir(parents=True, exist_ok=False)
     return path
 
@@ -535,6 +536,12 @@ def _write_turnover_run_info(
         "timezone": config.timezone,
         "python_version": platform.python_version(),
         "finlab_version": finlab_version,
+        "price_source_open": "etl:adj_open",
+        "price_source_close": "etl:adj_close",
+        "outcome_price_adjusted": True,
+        "corporate_action_fix": "0050_split_2025_06",
+        "previous_turnover_commit": "08b519686c42a209374d98fe84d0c36c634324f7",
+        "previous_turnover_output": "/content/drive/MyDrive/Quant_Research/taiwan-margin-short-0050-research/margin_turnover/20260912_071957_08b5196_margin_turnover_incremental",
         "study": "margin_turnover_incremental",
         "k_values": config.k_values,
         "rolling_windows": config.rolling_windows,
@@ -761,6 +768,9 @@ def run_margin_turnover_study(
         data["close"][config.target_symbol],
         config.outcome_horizons,
     )
+    price_diagnostics = validate_split_window(
+        data["open"][config.target_symbol], data["close"][config.target_symbol], outcomes
+    )
     primary, fdr, fdr_diag = run_turnover_primary(features, outcomes)
     pr_bins = _attach_variant(run_pr_bin_descriptive(features, outcomes), features)
     controlled = _attach_variant(
@@ -794,6 +804,7 @@ def run_margin_turnover_study(
         "features": features,
         "feature_catalog": turnover_feature_catalog(features),
         "outcomes": outcomes,
+        "outcome_price_diagnostics": price_diagnostics,
         "primary": primary,
         "fdr": fdr,
         "fdr_diagnostics": fdr_diag,
@@ -818,6 +829,7 @@ def run_margin_turnover_study(
             "turnover_annual_results.csv": annual,
             "turnover_annual_robustness_summary.csv": annual_summary,
             "turnover_neighborhood_consistency.csv": neighborhood,
+            "outcome_price_diagnostics.csv": price_diagnostics,
         }
         for filename, frame in outputs.items():
             frame.to_csv(run_dir / filename, index=False)

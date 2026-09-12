@@ -342,12 +342,15 @@ class MarginCompositionTests(unittest.TestCase):
                 "low_turnover_composition_annual_results.csv", "low_turnover_composition_annual_summary.csv",
                 "low_turnover_year_contribution.csv", "low_turnover_event_clusters.csv",
                 "composition_absorption_results.csv", "composition_summary.md",
+                "outcome_price_diagnostics.csv",
             }
             self.assertTrue(expected.issubset({path.name for path in result["run_dir"].iterdir()}))
             info = (result["run_dir"] / "run_info_composition.txt").read_text(encoding="utf-8")
             self.assertIn("baseline_full_research_rerun=False", info)
             self.assertIn("turnover_full_research_rerun=False", info)
             self.assertIn(f"fdr_scope={FDR_SCOPE}", info)
+            self.assertIn("price_source_open=etl:adj_open", info)
+            self.assertIn("outcome_price_adjusted=True", info)
 
 
 if __name__ == "__main__":

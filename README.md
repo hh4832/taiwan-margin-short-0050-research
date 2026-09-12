@@ -113,7 +113,7 @@ python -m unittest discover -s tests -v
 
 ## Margin Turnover incremental branch
 
-`research/margin-turnover` 將既有 `8a2c44efbe29149e43e9e2b808c204697b472d6a`
+`research/margin-turnover` 將 adjusted baseline `1a7c39bafef5d4affc40975b08fdffe52f1d5fe6`
 研究視為 frozen baseline，只新增一個 economic variable：`margin_buy + margin_sell`。
 獨立入口是 `src.margin_turnover.run_margin_turnover_study()`；它不呼叫
 `src.pipeline.run()`，也不重算原本 4,884 個 tests、short/level/suspension、完整年度、
@@ -149,7 +149,7 @@ neighborhood outputs，且 `run_info.txt` 的完整 git commit 必須等於指�
 ## Margin Composition incremental branch
 
 `research/margin-composition` 以 turnover commit
-`08b519686c42a209374d98fe84d0c36c634324f7` 為 frozen base，只新增
+`efe16a16b16d634667df792a6cf51c52b8ca9de3` 為 adjusted frozen base，只新增
 `buy_share = BuyAmount_k / (BuyAmount_k + SellAmount_k)`。分子與分母先各自加總 k 日，
 非正分母維持缺值，不補值或推測。`imbalance = 2 * buy_share - 1` 只作數值、排序、
 percentile 與 PR bin 等價性驗證，不形成第二個 FDR family。
@@ -165,3 +165,11 @@ Colab 使用 `notebooks/margin_composition_incremental_colab.ipynb`，必須指�
 `BASELINE_RUN_DIR` 與 `TURNOVER_RUN_DIR`。入口
 `src.margin_composition.run_margin_composition_study()` 不呼叫完整 pipeline 或既有兩項研究，
 結果只寫入 timestamped `outputs_composition/`。
+
+## Adjusted 0050 outcome prices
+
+0050 forward outcomes use `etl:adj_open` and `etl:adj_close`. This removes the
+June 2025 1:4 split discontinuity while leaving the O1→Ch formula, horizons,
+predictors, thresholds, and FDR universe unchanged. Each full run writes
+`outcome_price_diagnostics.csv`, uses an `_adjusted_price` output suffix, and
+records the price sources and corporate-action correction in `run_info.txt`.
