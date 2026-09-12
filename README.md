@@ -145,3 +145,23 @@ Colab 使用 `notebooks/margin_turnover_incremental_colab.ipynb`，必須明確�
 `BASELINE_RUN_DIR`。該資料夾必須包含 baseline 的 run info、FDR、controlled、annual 與
 neighborhood outputs，且 `run_info.txt` 的完整 git commit 必須等於指定 baseline，否則停止。
 增量結果輸出到 `outputs_turnover/<timestamp>_<commit>_margin_turnover_incremental/`，不覆寫 baseline。
+
+## Margin Composition incremental branch
+
+`research/margin-composition` 以 turnover commit
+`08b519686c42a209374d98fe84d0c36c634324f7` 為 frozen base，只新增
+`buy_share = BuyAmount_k / (BuyAmount_k + SellAmount_k)`。分子與分母先各自加總 k 日，
+非正分母維持缺值，不補值或推測。`imbalance = 2 * buy_share - 1` 只作數值、排序、
+percentile 與 PR bin 等價性驗證，不形成第二個 FDR family。
+
+推論範圍固定為 4 個 k、4 個 rolling windows、2 個 tails 與 6 個 outcomes，共 192
+個 cells；scope 是 `margin_composition_incremental_study`。NaN p-value 明確標為
+`Not Testable`。固定低 turnover 診斷只檢查 amount-ratio k10/W504/PR0-5，並把
+composition 分為 PR0-20、PR20-80、PR80-100 三組。Model B→C absorption 使用相同
+complete-case rows；rank、condition number、leverage 或 HC3 失敗一律標為
+`unstable_collinearity`。
+
+Colab 使用 `notebooks/margin_composition_incremental_colab.ipynb`，必須指定 frozen
+`BASELINE_RUN_DIR` 與 `TURNOVER_RUN_DIR`。入口
+`src.margin_composition.run_margin_composition_study()` 不呼叫完整 pipeline 或既有兩項研究，
+結果只寫入 timestamped `outputs_composition/`。

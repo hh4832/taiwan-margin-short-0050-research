@@ -10,5 +10,7 @@ outputs/*
 !outputs/.gitkeep
 outputs_turnover/*
 !outputs_turnover/.gitkeep
+outputs_composition/*
+!outputs_composition/.gitkeep
 .ipynb_checkpoints/
 .DS_Store
