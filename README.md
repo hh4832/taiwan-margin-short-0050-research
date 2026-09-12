@@ -113,7 +113,7 @@ python -m unittest discover -s tests -v
 
 ## Margin Turnover incremental branch
 
-`research/margin-turnover` 將既有 `8a2c44efbe29149e43e9e2b808c204697b472d6a`
+`research/margin-turnover` 將 adjusted baseline `1a7c39bafef5d4affc40975b08fdffe52f1d5fe6`
 研究視為 frozen baseline，只新增一個 economic variable：`margin_buy + margin_sell`。
 獨立入口是 `src.margin_turnover.run_margin_turnover_study()`；它不呼叫
 `src.pipeline.run()`，也不重算原本 4,884 個 tests、short/level/suspension、完整年度、
@@ -145,3 +145,11 @@ Colab 使用 `notebooks/margin_turnover_incremental_colab.ipynb`，必須明確�
 `BASELINE_RUN_DIR`。該資料夾必須包含 baseline 的 run info、FDR、controlled、annual 與
 neighborhood outputs，且 `run_info.txt` 的完整 git commit 必須等於指定 baseline，否則停止。
 增量結果輸出到 `outputs_turnover/<timestamp>_<commit>_margin_turnover_incremental/`，不覆寫 baseline。
+
+## Adjusted 0050 outcome prices
+
+0050 forward outcomes use `etl:adj_open` and `etl:adj_close`. This removes the
+June 2025 1:4 split discontinuity while leaving the O1→Ch formula, horizons,
+predictors, thresholds, and FDR universe unchanged. Each full run writes
+`outcome_price_diagnostics.csv`, uses an `_adjusted_price` output suffix, and
+records the price sources and corporate-action correction in `run_info.txt`.

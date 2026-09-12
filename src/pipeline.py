@@ -13,6 +13,7 @@ from .diagnostics import aggregate_comparison, dataset_coverage, stabilize_recon
 from .features import adjusted_short_change, adjust_short_for_suspensions, build_feature_catalog, build_level_features, kday_change, level_feature_diagnostics, position_market_value, rolling_ratio, trailing_percentile
 from .outcomes import build_outcomes
 from .reporting import add_suspension_reporting_fields, assess_signals, create_run_directory, get_latest_tradable_signal_date, signal_summary, thermometer_table, write_run_info
+from .price_validation import validate_split_window
 from .statistics import annual_results, annual_robustness_summary, classify_pr_shapes, controlled_regression_diagnostics, neighborhood_consistency, regime_results, run_controlled_tests, run_pr_bin_descriptive, run_primary_tests, short_cover_variant_diagnostics
 from .universe import build_universe_diagnostics
 
@@ -166,6 +167,7 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
     suspension_invalid = stage_zero["suspension_invalid_events"]
     features = build_features(d, primary_symbols, config)
     outcomes = build_outcomes(d["open"]["0050"], d["close"]["0050"], config.outcome_horizons)
+    price_diagnostics = validate_split_window(d["open"]["0050"], d["close"]["0050"], outcomes)
     level_diagnostics = level_feature_diagnostics(stage_zero["base_series"], features, outcomes)
     primary = run_primary_tests(features, outcomes)
     fdr = apply_fdr(primary) if not primary.empty else primary
@@ -225,6 +227,7 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         "coverage": coverage, "reconciliation": reconciliation, "universe": universe_diag,
         "suspension": suspension_diag, "suspension_validation": suspension_validation,
         "suspension_invalid_events": suspension_invalid, "features": features, "outcomes": outcomes,
+        "outcome_price_diagnostics": price_diagnostics,
         "level_feature_diagnostics": level_diagnostics, "primary": primary_report, "fdr": assessed,
         "fdr_diagnostics": fdr_diag, "controlled": controlled_report,
         "controlled_diagnostics": controlled_diagnostics, "pr_bins": pr_bins_report,
@@ -235,7 +238,7 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         "latest_signal_date": latest_signal_date, "robustness": robustness,
     }
     if export:
-        run_dir, _ = create_run_directory(config.output_root, config.timezone)
+        run_dir, _ = create_run_directory(config.output_root, config.timezone, "adjusted_price")
         result["run_dir"] = run_dir
         coverage.to_csv(run_dir / "dataset_coverage.csv", index=False)
         reconciliation.to_csv(run_dir / "reconciliation_summary.csv", index=False)
@@ -244,6 +247,7 @@ def run(config: ResearchConfig | None = None, provider=None, export: bool = True
         d["short_suspension"].to_csv(run_dir / "suspension_events.csv", index=False)
         suspension_invalid.to_csv(run_dir / "suspension_invalid_events.csv", index=False)
         suspension_validation.to_csv(run_dir / "suspension_validation_summary.csv", index=False)
+        price_diagnostics.to_csv(run_dir / "outcome_price_diagnostics.csv", index=False)
         build_feature_catalog().to_csv(run_dir / "feature_catalog.csv", index=False)
         level_diagnostics.to_csv(run_dir / "level_feature_diagnostics.csv", index=False)
         primary_report.to_csv(run_dir / "primary_results.csv", index=False)

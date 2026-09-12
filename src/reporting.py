@@ -31,10 +31,10 @@ def git_value(args: list[str], default="unknown") -> str:
         return default
 
 
-def create_run_directory(root: Path, timezone: str) -> tuple[Path, str]:
+def create_run_directory(root: Path, timezone: str, suffix: str = "") -> tuple[Path, str]:
     commit = git_value(["rev-parse", "--short", "HEAD"])
     stamp = datetime.now(ZoneInfo(timezone)).strftime("%Y%m%d_%H%M%S")
-    path = root / f"{stamp}_{commit}"
+    path = root / f"{stamp}_{commit}{f'_{suffix}' if suffix else ''}"
     path.mkdir(parents=True, exist_ok=False)
     return path, commit
 
@@ -46,6 +46,10 @@ def write_run_info(path: Path, config, coverage: pd.DataFrame, finlab_version="u
         "git_commit": git_value(["rev-parse", "HEAD"]),
         "run_timestamp": datetime.now(ZoneInfo(config.timezone)).isoformat(), "timezone": config.timezone,
         "python_version": platform.python_version(), "finlab_version": finlab_version,
+        "price_source_open": "etl:adj_open", "price_source_close": "etl:adj_close",
+        "outcome_price_adjusted": True, "corporate_action_fix": "0050_split_2025_06",
+        "previous_baseline_commit": "8a2c44efbe29149e43e9e2b808c204697b472d6a",
+        "previous_baseline_output": "/content/drive/MyDrive/Quant_Research/taiwan-margin-short-0050-research/20260912_030039_8a2c44e",
         "suspension_analysis": "retrospective sensitivity; explicit start/end inclusive; missing end=start",
         "suspension_publication_time_verified": False,
         "rolling_windows": config.rolling_windows, "k_values": config.k_values,

@@ -364,11 +364,14 @@ class MarginTurnoverTests(unittest.TestCase):
                 "turnover_controlled_results.csv", "turnover_absorption_results.csv",
                 "turnover_annual_results.csv", "turnover_annual_robustness_summary.csv",
                 "turnover_neighborhood_consistency.csv", "turnover_summary.md",
+                "outcome_price_diagnostics.csv",
             }
             self.assertTrue(expected.issubset({path.name for path in result["run_dir"].iterdir()}))
             run_info = (result["run_dir"] / "run_info_turnover.txt").read_text(encoding="utf-8")
             self.assertIn("baseline_full_research_rerun=False", run_info)
             self.assertIn(f"fdr_scope={FDR_SCOPE}", run_info)
+            self.assertIn("price_source_open=etl:adj_open", run_info)
+            self.assertIn("outcome_price_adjusted=True", run_info)
 
 
 if __name__ == "__main__":
