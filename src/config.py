@@ -32,8 +32,8 @@ class ResearchConfig:
 
 
 FINLAB_FIELDS = {
-    "open": "price:開盤價",
-    "close": "price:收盤價",
+    "open": "etl:adj_open",
+    "close": "etl:adj_close",
     "margin_buy": "margin_transactions:融資買進",
     "margin_sell": "margin_transactions:融資賣出",
     "margin_cash_repayment": "margin_transactions:融資現金償還",

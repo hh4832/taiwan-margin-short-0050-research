@@ -110,3 +110,11 @@ python -m unittest discover -s tests -v
 ```
 
 沒有實際 FinLab credential/data 的測試只驗證 accounting、日期對齊、公式與防止 future leakage；不代表已完成實證研究。
+
+## Adjusted 0050 outcome prices
+
+0050 forward outcomes use `etl:adj_open` and `etl:adj_close`. This removes the
+June 2025 1:4 split discontinuity while leaving the O1→Ch formula, horizons,
+predictors, thresholds, and FDR universe unchanged. Each full run writes
+`outcome_price_diagnostics.csv`, uses an `_adjusted_price` output suffix, and
+records the price sources and corporate-action correction in `run_info.txt`.
