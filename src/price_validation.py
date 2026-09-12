@@ -75,6 +75,33 @@ def raw_vs_adjusted_split_validation(raw_close: pd.Series, adjusted_close: pd.Se
     ])
 
 
+def split_artifact_observation_counts(
+    raw_open: pd.Series,
+    raw_close: pd.Series,
+    adjusted_open: pd.Series,
+    adjusted_close: pd.Series,
+) -> pd.DataFrame:
+    """Count known-window d0 rows where raw prices create a split-scale loss."""
+    from .outcomes import build_outcomes
+
+    horizons = (1, 2, 3, 5, 10, 20)
+    raw = build_outcomes(raw_open, raw_close, horizons)
+    adjusted = build_outcomes(adjusted_open, adjusted_close, horizons)
+    columns = (*OUTCOME_COLUMNS, "C0_O1_descriptive_nontradable")
+    rows = []
+    for column in columns:
+        pair = pd.concat({"raw": raw[column], "adjusted": adjusted[column]}, axis=1).loc[SANITY_START:SANITY_END].dropna()
+        contaminated = pair["raw"].le(-0.50) & pair["adjusted"].gt(-0.50)
+        rows.append({
+            "outcome_horizon": column,
+            "split_artifact_observations": int(contaminated.sum()),
+            "affected_signal_dates": ",".join(pair.index[contaminated].strftime("%Y-%m-%d")),
+            "minimum_raw_return": pair["raw"].min() if len(pair) else np.nan,
+            "minimum_adjusted_return": pair["adjusted"].min() if len(pair) else np.nan,
+        })
+    return pd.DataFrame(rows)
+
+
 def compare_research_results(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     keys = [column for column in COMPARISON_KEYS if column in old.columns and column in new.columns]
     if not keys:
@@ -109,7 +136,12 @@ def comparison_horizon_summary(comparison: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def write_corporate_action_impact_report(path: str | Path, validation: pd.DataFrame, comparison: pd.DataFrame | None = None) -> Path:
+def write_corporate_action_impact_report(
+    path: str | Path,
+    validation: pd.DataFrame,
+    comparison: pd.DataFrame | None = None,
+    outcome_impact: pd.DataFrame | None = None,
+) -> Path:
     path = Path(path)
     sources = validation.get("price_source", pd.Series(dtype="object"))
     raw = validation.loc[sources.eq("price:收盤價"), "return"] if "return" in validation else pd.Series(dtype=float)
@@ -119,7 +151,8 @@ def write_corporate_action_impact_report(path: str | Path, validation: pd.DataFr
         "## B. Corporate action", "", "2025/6 0050 1:4 split。", "",
         "## C. 受影響 outcome", "", "C0_O1 與跨分割尺度的 C2/C3/C5/C10/C20；C1 亦已實際驗證。", "",
         "## D. Old vs adjusted price", "", f"Raw return: {raw.iloc[0]:.6%}" if len(raw) else "Raw return: not available", f"Adjusted return: {adjusted.iloc[0]:.6%}" if len(adjusted) else "Adjusted return: not available", "",
-        "## E. 受污染 observation 數量", "", "請見 old-vs-new comparison 與 outcome diagnostics。", "",
+        "## E. 受污染 observation 數量", "",
+        f"Known-window split artifacts: {int(outcome_impact['split_artifact_observations'].sum())}" if outcome_impact is not None else "尚未執行 raw-vs-adjusted outcome comparison。", "",
         "## F. Evidence level 變化", "", f"Changed cells: {int(comparison['evidence_changed'].sum())}" if comparison is not None and "evidence_changed" in comparison else "尚未完成正式 rerun。", "",
         "## G. Survived conclusions", "", "正式 rerun 前無法判定。", "",
         "## H. Withdrawn conclusions", "", "所有依賴 raw-price 跨分割報酬的舊結論均暫時撤回，等待 adjusted rerun。", "",

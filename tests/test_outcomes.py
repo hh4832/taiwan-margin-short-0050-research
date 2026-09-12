@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 from src.config import FINLAB_FIELDS
 from src.outcomes import build_outcomes
-from src.price_validation import raw_vs_adjusted_split_validation, validate_split_window
+from src.price_validation import raw_vs_adjusted_split_validation, split_artifact_observation_counts, validate_split_window
 
 
 class OutcomeTests(unittest.TestCase):
@@ -44,3 +44,16 @@ class OutcomeTests(unittest.TestCase):
         with patch.dict(FINLAB_FIELDS, {"open": "price:開盤價", "close": "price:收盤價"}):
             with self.assertRaises(RuntimeError):
                 validate_split_window(prices, prices, outcomes)
+
+    def test_split_artifact_observations_are_counted_by_horizon(self):
+        idx = pd.bdate_range("2025-05-20", "2025-06-20")
+        adjusted_open = pd.Series(np.linspace(360, 368, len(idx)), idx)
+        adjusted_close = adjusted_open + .5
+        raw_open = adjusted_open.copy()
+        raw_close = adjusted_close.copy()
+        raw_open.loc["2025-06-18":] /= 4
+        raw_close.loc["2025-06-18":] /= 4
+        impact = split_artifact_observation_counts(raw_open, raw_close, adjusted_open, adjusted_close)
+        self.assertGreater(impact["split_artifact_observations"].sum(), 0)
+        c1 = impact.loc[impact["outcome_horizon"].eq("O1_C1"), "split_artifact_observations"].iloc[0]
+        self.assertEqual(c1, 0)
