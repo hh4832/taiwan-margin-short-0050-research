@@ -113,7 +113,7 @@ python -m unittest discover -s tests -v
 
 ## Margin Turnover incremental branch
 
-`research/margin-turnover` 將 adjusted baseline `1a7c39bafef5d4affc40975b08fdffe52f1d5fe6`
+`research/margin-turnover` 將 adjusted baseline `88d9f267ddfa4b5e80cadcb1709d34ab0d9ab2ce`
 研究視為 frozen baseline，只新增一個 economic variable：`margin_buy + margin_sell`。
 獨立入口是 `src.margin_turnover.run_margin_turnover_study()`；它不呼叫
 `src.pipeline.run()`，也不重算原本 4,884 個 tests、short/level/suspension、完整年度、

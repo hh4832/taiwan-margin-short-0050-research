@@ -30,7 +30,7 @@ from .statistics import (
 from .universe import build_universe_diagnostics
 
 
-BASELINE_COMMIT = "1a7c39bafef5d4affc40975b08fdffe52f1d5fe6"
+BASELINE_COMMIT = "88d9f267ddfa4b5e80cadcb1709d34ab0d9ab2ce"
 FDR_SCOPE = "margin_turnover_incremental_study"
 TURNOVER_VARIANTS = ("raw_lots", "volume_ratio", "amount_ratio")
 REQUIRED_BASELINE_FILES = (
