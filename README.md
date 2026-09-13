@@ -237,3 +237,25 @@ diagnostics。Colab runner 是
 `notebooks/margin_buy_sell_prior_return_joint_colab.ipynb`，固定讀取 prompt 指定的四個 Drive
 run directories，不用 glob 或最新資料夾 fallback。輸出寫入 timestamped
 `outputs_joint_flow_prior_return/`，不覆寫既有研究或舊 run。
+
+## Short flow × prior-return symmetry integrated study
+
+`research/short-flow-prior-return-symmetry` 從正式 margin joint commit `4a6fb827...` 建立，
+以單一 `src.short_flow_prior_return_symmetry` module 分階段研究 Short Sell、Short Cover 與
+Short Repayment，不把 Cover 與 Repayment 合併。既有 baseline 並沒有 short-flow native
+`amount_ratio`；其 amount 欄位只屬於融資，不能冒充融券金額。因此本研究不估算虛構成交
+金額，正式沿用 baseline 已有的 `volume_ratio`（k 日融券張數×1000 ÷ k 日市場成交股數，
+ratio of sums），並在 validation、run_info 與 summary 明列此限制。Raw signals 進正式 FDR；
+suspension-adjusted signals 仍保留為 retrospective sensitivity，不混入 primary universe。
+
+研究固定使用 k=1/3/5/10、W=126/252/504/756、PR95-100 與 O1_C1/2/3/5/10/20。
+Baseline、joint interaction 與 joint main effects 分屬三個 BH-FDR scope。Short turnover 僅定義為
+Short Sell+Short Cover volume ratio，排除 Short Repayment，且只作 robustness。Level A/B
+interaction 另以 outcome horizon 作固定 lag 的 Newey–West/HAC covariance，並由回歸係數直接
+推導 crossover；P1/P99 以外標為 extrapolation，不掃描最佳 threshold。VIF>10 或 condition
+number≥1e12 的 joint model 標為 `unstable_collinearity`。
+
+Colab runner 是 `notebooks/run_short_flow_prior_return_symmetry.ipynb`。Baseline 路徑固定；正式
+margin joint folder 尚須由使用者填入精確 folder name，runner 會在 placeholder 未替換時停止，
+不使用 glob 或「最新資料夾」fallback。輸出寫入 timestamped
+`outputs_short_flow_prior_return_symmetry/`，再以不覆寫方式封存到 Drive。
