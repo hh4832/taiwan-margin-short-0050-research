@@ -1,7 +1,10 @@
 import inspect
+import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -9,7 +12,16 @@ import pandas as pd
 from src.margin_regime_interaction import (
     COMPOSITION_COMMIT,
     FDR_SCOPE,
+    ANNUAL_RESULT_COLUMNS,
+    ANNUAL_SUMMARY_COLUMNS,
+    COLAB_REPO_DIR,
+    FORMAL_BASELINE_RUN_DIR,
+    FORMAL_COMPOSITION_RUN_DIR,
+    FORMAL_DRIVE_OUTPUT_ROOT,
+    FORMAL_TURNOVER_RUN_DIR,
     MarginRegimeInteractionConfig,
+    align_regime_to_signal_index,
+    annual_regime_results,
     apply_interaction_fdr,
     binary_regime,
     fit_regime_interaction,
@@ -20,6 +32,7 @@ from src.margin_regime_interaction import (
     regime_signal_distribution,
     run_margin_regime_interaction_study,
     select_primary_signal_specs,
+    validate_regime_input_runs,
 )
 from src.margin_turnover import BASELINE_COMMIT
 from src.margin_composition import TURNOVER_BASE_COMMIT
@@ -75,12 +88,20 @@ def frozen_dirs(root: Path):
     turnover = root / "turnover"
     composition = root / "composition"
     baseline.mkdir(); turnover.mkdir(); composition.mkdir()
-    (baseline / "run_info.txt").write_text(f"git_commit={BASELINE_COMMIT}\n", encoding="utf-8")
+    adjusted = (
+        "repository=taiwan-margin-short-0050-research\n"
+        "price_source_open=etl:adj_open\nprice_source_close=etl:adj_close\n"
+        "outcome_price_adjusted=True\n"
+    )
+    (baseline / "run_info.txt").write_text(
+        adjusted + f"git_commit={BASELINE_COMMIT}\n", encoding="utf-8"
+    )
     baseline_fdr().to_csv(baseline / "fdr_results.csv", index=False)
     for name in ("controlled_results.csv", "annual_robustness_summary.csv", "neighborhood_consistency.csv"):
         pd.DataFrame({"x": []}).to_csv(baseline / name, index=False)
     (turnover / "run_info_turnover.txt").write_text(
-        f"git_commit={TURNOVER_BASE_COMMIT}\nbaseline_commit={BASELINE_COMMIT}\n", encoding="utf-8"
+        adjusted + f"git_commit={TURNOVER_BASE_COMMIT}\n"
+        f"baseline_commit={BASELINE_COMMIT}\n", encoding="utf-8"
     )
     for name in (
         "turnover_primary_results.csv", "turnover_fdr_results.csv", "turnover_annual_results.csv",
@@ -88,9 +109,9 @@ def frozen_dirs(root: Path):
     ):
         pd.DataFrame({"x": []}).to_csv(turnover / name, index=False)
     (composition / "run_info_composition.txt").write_text(
-        f"git_commit={COMPOSITION_COMMIT}\nturnover_base_commit={TURNOVER_BASE_COMMIT}\n"
-        f"baseline_commit={BASELINE_COMMIT}\nprice_source_open=etl:adj_open\n"
-        "price_source_close=etl:adj_close\n", encoding="utf-8"
+        adjusted + f"git_commit={COMPOSITION_COMMIT}\n"
+        f"turnover_base_commit={TURNOVER_BASE_COMMIT}\n"
+        f"baseline_commit={BASELINE_COMMIT}\n", encoding="utf-8"
     )
     for name in (
         "composition_primary_results.csv", "composition_fdr_results.csv",
@@ -102,6 +123,13 @@ def frozen_dirs(root: Path):
 
 
 class MarginRegimeInteractionTests(unittest.TestCase):
+    def _alignment_inputs(self):
+        index = pd.bdate_range("2024-01-01", periods=10)
+        signals = pd.DataFrame({PREDICTOR: [0., 1.] * 5}, index=index)
+        regime = pd.Series([pd.NA] * 5 + ["Up", "Down", "Up", "Down", "Up"],
+                           index=index, dtype="string", name="regime")
+        return signals, regime
+
     def test_prior_return_uses_t_and_t_minus_5_only(self):
         close = pd.Series(np.arange(100., 112.))
         original = prior_5d_return(close)
@@ -136,6 +164,48 @@ class MarginRegimeInteractionTests(unittest.TestCase):
         result = regime_signal_distribution(signals, regime, specs).iloc[0]
         self.assertEqual((result["Up N"], result["Down N"]), (2, 1))
         self.assertAlmostEqual(result["Up %"], 2 / 3)
+
+    def test_exact_matching_indexes_align_without_warning(self):
+        signals, regime = self._alignment_inputs()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            aligned, diagnostics = align_regime_to_signal_index(signals, regime)
+            regime_signal_distribution(
+                signals, aligned,
+                pd.DataFrame([{"predictor": PREDICTOR, "family": "margin_buy", "k": 1,
+                               "rolling_window": 10, "pr_group": "PR95-100"}]),
+            )
+        self.assertFalse(any(issubclass(item.category, FutureWarning) for item in caught))
+        self.assertTrue(aligned.index.equals(signals.index))
+        self.assertEqual(diagnostics.loc[0, "alignment_status"], "PASS")
+
+    def test_mismatched_but_alignable_indexes(self):
+        signals, regime = self._alignment_inputs()
+        signals = signals.iloc[2:8]
+        aligned, diagnostics = align_regime_to_signal_index(signals, regime)
+        self.assertTrue(aligned.index.equals(signals.index))
+        self.assertEqual(diagnostics.loc[0, "extra_regime_dates"], 4)
+        self.assertEqual(diagnostics.loc[0, "unexpected_active_signal_missing_regime_dates"], 0)
+
+    def test_expected_prior_5d_warmup_is_recorded(self):
+        signals, regime = self._alignment_inputs()
+        signals[PREDICTOR] = 1.0
+        _, diagnostics = align_regime_to_signal_index(signals, regime)
+        self.assertEqual(diagnostics.loc[0, "expected_prior_5d_warmup_missing_dates"], 5)
+        self.assertEqual(diagnostics.loc[0, "unexpected_active_signal_missing_regime_dates"], 0)
+
+    def test_unexpected_observed_signal_missing_regime_raises(self):
+        signals, regime = self._alignment_inputs()
+        regime.iloc[7] = pd.NA
+        signals.iloc[7, 0] = 0.0
+        with self.assertRaisesRegex(ValueError, "no corresponding Up/Down regime"):
+            align_regime_to_signal_index(signals, regime)
+
+    def test_duplicate_date_index_raises(self):
+        signals, regime = self._alignment_inputs()
+        duplicate = pd.concat([signals, signals.iloc[[-1]]])
+        with self.assertRaisesRegex(ValueError, "Duplicate date index"):
+            align_regime_to_signal_index(duplicate, regime)
 
     def test_descriptive_effect_uses_same_regime_control(self):
         index = pd.bdate_range("2024-01-01", periods=8)
@@ -222,6 +292,76 @@ class MarginRegimeInteractionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "git_commit mismatch"):
                 load_frozen_composition(composition)
 
+    def test_zero_level_a_b_candidates_return_formal_empty_schemas(self):
+        signals, regime = self._alignment_inputs()
+        outcomes = pd.DataFrame({"O1_C1": np.linspace(0, .01, len(signals))}, index=signals.index)
+        empty = pd.DataFrame(columns=["family", "signal", "pr_group", "k", "rolling_window", "outcome"])
+        annual, summary = annual_regime_results(empty, signals, regime, outcomes)
+        self.assertEqual(tuple(annual.columns), ANNUAL_RESULT_COLUMNS)
+        self.assertEqual(tuple(summary.columns), ANNUAL_SUMMARY_COLUMNS)
+        self.assertTrue(annual.empty and summary.empty)
+
+    def test_nonzero_level_a_b_candidates_produce_annual_rows(self):
+        signals, regime = self._alignment_inputs()
+        outcomes = pd.DataFrame({"O1_C1": np.linspace(0, .01, len(signals))}, index=signals.index)
+        candidate = pd.DataFrame([{
+            "family": "margin_buy", "signal": PREDICTOR, "pr_group": "PR95-100",
+            "k": 1, "rolling_window": 10, "outcome": "O1_C1",
+        }])
+        annual, summary = annual_regime_results(candidate, signals, regime, outcomes)
+        self.assertFalse(annual.empty)
+        self.assertFalse(summary.empty)
+
+    def test_invalid_baseline_path_stops_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); _, turnover, composition = frozen_dirs(root)
+            with self.assertRaisesRegex(FileNotFoundError, "Baseline run directory"):
+                validate_regime_input_runs(root / "missing", turnover, composition)
+
+    def test_invalid_turnover_path_stops_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); baseline, _, composition = frozen_dirs(root)
+            with self.assertRaisesRegex(FileNotFoundError, "Turnover run directory"):
+                validate_regime_input_runs(baseline, root / "missing", composition)
+
+    def test_invalid_composition_path_stops_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); baseline, turnover, _ = frozen_dirs(root)
+            with self.assertRaisesRegex(FileNotFoundError, "Composition run directory"):
+                validate_regime_input_runs(baseline, turnover, root / "missing")
+
+    def test_dependency_commit_mismatch_stops_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); baseline, turnover, composition = frozen_dirs(root)
+            info = turnover / "run_info_turnover.txt"
+            info.write_text(info.read_text().replace(BASELINE_COMMIT, "wrong"), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "baseline_commit mismatch"):
+                validate_regime_input_runs(baseline, turnover, composition)
+
+    def test_adjusted_price_source_mismatch_stops_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); baseline, turnover, composition = frozen_dirs(root)
+            info = baseline / "run_info.txt"
+            info.write_text(info.read_text().replace("etl:adj_open", "price:開盤價"), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "price_source_open mismatch"):
+                validate_regime_input_runs(baseline, turnover, composition)
+
+    def test_colab_uses_fixed_formal_paths_and_quick_diagnostics(self):
+        notebook_path = Path("notebooks/margin_regime_interaction_incremental_colab.ipynb")
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+        source = "\n".join(
+            line for cell in notebook["cells"] for line in cell.get("source", [])
+        )
+        for path in (
+            COLAB_REPO_DIR, FORMAL_BASELINE_RUN_DIR, FORMAL_TURNOVER_RUN_DIR,
+            FORMAL_COMPOSITION_RUN_DIR, FORMAL_DRIVE_OUTPUT_ROOT,
+        ):
+            self.assertIn(str(path), source)
+        self.assertIn("validate_regime_input_runs", source)
+        self.assertIn("Adjusted price validation: PASS", source)
+        self.assertIn("value_counts(dropna=False)", source)
+        self.assertIn("annual_robustness_summary", source)
+
     def test_runner_is_incremental_and_exports_required_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -229,10 +369,22 @@ class MarginRegimeInteractionTests(unittest.TestCase):
             config = MarginRegimeInteractionConfig(
                 min_group_n=2, output_root=root / "outputs_regime_interaction"
             )
-            result = run_margin_regime_interaction_study(
-                baseline, turnover, composition, config=config,
-                datasets=synthetic_data(), export=True,
-            )
+            def no_candidates(frame):
+                fdr = frame.copy()
+                fdr["family_fdr_q_value"] = np.nan
+                fdr["global_fdr_q_value"] = np.nan
+                fdr["evidence_level"] = "No Evidence"
+                fdr["fdr_scope"] = FDR_SCOPE
+                diagnostics = pd.DataFrame([{
+                    "metric": "number_of_tests_total", "value": len(fdr),
+                    "fdr_scope": FDR_SCOPE,
+                }])
+                return fdr, diagnostics
+            with patch("src.margin_regime_interaction.apply_interaction_fdr", side_effect=no_candidates):
+                result = run_margin_regime_interaction_study(
+                    baseline, turnover, composition, config=config,
+                    datasets=synthetic_data(), export=True,
+                )
             expected = {
                 "run_info_regime_interaction.txt", "regime_signal_distribution.csv",
                 "regime_primary_results.csv", "regime_interaction_results.csv",
@@ -242,9 +394,16 @@ class MarginRegimeInteractionTests(unittest.TestCase):
                 "regime_summary.md",
             }
             self.assertTrue(expected.issubset({p.name for p in result["run_dir"].iterdir()}))
+            self.assertEqual(tuple(result["annual_results"].columns), ANNUAL_RESULT_COLUMNS)
+            self.assertEqual(tuple(result["annual_robustness_summary"].columns), ANNUAL_SUMMARY_COLUMNS)
+            summary = (result["run_dir"] / "regime_summary.md").read_text()
+            self.assertIn(
+                "No Level A/B candidates; annual confirmatory analysis not applicable.", summary
+            )
             info = (result["run_dir"] / "run_info_regime_interaction.txt").read_text()
             for value in (BASELINE_COMMIT, TURNOVER_BASE_COMMIT, COMPOSITION_COMMIT,
-                          "price_source_open=etl:adj_open", "price_source_close=etl:adj_close"):
+                          "price_source_open=etl:adj_open", "price_source_close=etl:adj_close",
+                          "outcome_price_adjusted=True", "git_commit="):
                 self.assertIn(value, info)
             source = inspect.getsource(run_margin_regime_interaction_study)
             self.assertNotIn("pipeline.run", source)

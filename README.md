@@ -200,3 +200,16 @@ frozen run directories。結果寫入 timestamped `outputs_regime_interaction/`�
 `run_info_regime_interaction.txt` 記錄三個 dependency commits、current commit 與
 `etl:adj_open` / `etl:adj_close`。Signal occurrence 差異不能單獨證明預測效果差異；
 Margin Sell 也不得未經 occurrence 與 interaction 證據直接解讀成去槓桿。
+
+正式 Colab run 固定讀取下列 adjusted-price artifacts，不使用 glob 或「最新資料夾」fallback：
+
+- baseline：`20260912_220859_88d9f26_adjusted_price`
+- turnover：`margin_turnover/20260913_075344_e613b5e_margin_turnover_adjusted`
+- composition：`margin_composition/20260913_080358_cf16e4a_margin_composition_adjusted`
+
+`validate_regime_input_runs()` 會在 FinLab 資料載入前驗證三層必要檔案、repository、完整
+commit dependency chain、`etl:adj_open`、`etl:adj_close` 與
+`outcome_price_adjusted=True`；任何不符均停止。Regime 與 signal index 會明確 reindex 並輸出
+`regime_index_alignment_diagnostics.csv`。只有 prior-5D 前五個 warm-up 缺值可被記錄後排除；
+其餘 active signal 無 regime 時停止。若 interaction 沒有 Level A/B，年度 confirmatory
+輸出仍保留正式空 schema，不以 Level C 取代。

@@ -29,6 +29,23 @@ from .universe import build_universe_diagnostics
 
 COMPOSITION_COMMIT = "cf16e4aa7056c4c2c54e1d6248312bee6acac9da"
 FDR_SCOPE = "margin_regime_interaction_incremental_study"
+COLAB_REPO_DIR = Path("/content/taiwan-margin-short-0050-research")
+FORMAL_BASELINE_RUN_DIR = Path(
+    "/content/drive/MyDrive/Quant_Research/taiwan-margin-short-0050-research/"
+    "20260912_220859_88d9f26_adjusted_price"
+)
+FORMAL_TURNOVER_RUN_DIR = Path(
+    "/content/drive/MyDrive/Quant_Research/taiwan-margin-short-0050-research/"
+    "margin_turnover/20260913_075344_e613b5e_margin_turnover_adjusted"
+)
+FORMAL_COMPOSITION_RUN_DIR = Path(
+    "/content/drive/MyDrive/Quant_Research/taiwan-margin-short-0050-research/"
+    "margin_composition/20260913_080358_cf16e4a_margin_composition_adjusted"
+)
+FORMAL_DRIVE_OUTPUT_ROOT = Path(
+    "/content/drive/MyDrive/Quant_Research/taiwan-margin-short-0050-research/"
+    "margin_regime_interaction"
+)
 REQUIRED_COMPOSITION_FILES = (
     "run_info_composition.txt",
     "composition_primary_results.csv",
@@ -38,6 +55,22 @@ REQUIRED_COMPOSITION_FILES = (
     "composition_absorption_results.csv",
 )
 OUTCOME_COLUMNS = tuple(f"O1_C{h}" for h in (1, 2, 3, 5, 10, 20))
+ANNUAL_RESULT_COLUMNS = (
+    "family", "signal", "pr_group", "k", "rolling_window", "outcome", "year",
+    "signal_up_N", "signal_down_N", "effect_up", "effect_down",
+    "interaction_effect", "interaction_direction",
+)
+ANNUAL_SUMMARY_COLUMNS = (
+    "family", "signal", "pr_group", "k", "rolling_window", "outcome",
+    "years_with_effect", "positive_years", "negative_years",
+    "largest_year_sample_share", "interaction_direction_consistency",
+    "annual_robustness",
+)
+EVENT_CLUSTER_COLUMNS = (
+    "family", "signal", "pr_group", "regime", "cluster_start", "cluster_end",
+    "cluster_length", "first_signal_date", "outcome", "first_signal_return",
+    "daily_N", "cluster_N",
+)
 
 
 @dataclass(frozen=True)
@@ -87,6 +120,7 @@ def load_frozen_composition(
         "baseline_commit": expected_baseline,
         "price_source_open": "etl:adj_open",
         "price_source_close": "etl:adj_close",
+        "outcome_price_adjusted": "True",
     }
     for key, expected in checks.items():
         if info.get(key) != expected:
@@ -97,6 +131,113 @@ def load_frozen_composition(
     for filename in REQUIRED_COMPOSITION_FILES[1:]:
         result[filename.removesuffix(".csv")] = pd.read_csv(root / filename)
     return result
+
+
+def _require_run_info_values(
+    layer: str,
+    run_info: dict[str, str],
+    expected: dict[str, str],
+) -> None:
+    for key, value in expected.items():
+        actual = run_info.get(key)
+        if actual != value:
+            raise ValueError(
+                f"{layer} {key} mismatch: expected {value!r}, got {actual!r}"
+            )
+
+
+def validate_regime_input_runs(
+    baseline_run_dir: str | Path,
+    turnover_run_dir: str | Path,
+    composition_run_dir: str | Path,
+    config: MarginRegimeInteractionConfig | None = None,
+) -> dict[str, object]:
+    """Validate the exact three-layer adjusted-price input chain before loading data."""
+    config = config or MarginRegimeInteractionConfig()
+    directories = {
+        "Baseline": Path(baseline_run_dir).expanduser(),
+        "Turnover": Path(turnover_run_dir).expanduser(),
+        "Composition": Path(composition_run_dir).expanduser(),
+    }
+    required = {
+        "Baseline": ("run_info.txt", "fdr_results.csv"),
+        "Turnover": (
+            "run_info_turnover.txt", "turnover_fdr_results.csv",
+            "turnover_absorption_results.csv",
+        ),
+        "Composition": ("run_info_composition.txt", "composition_fdr_results.csv"),
+    }
+    info_names = {
+        "Baseline": "run_info.txt",
+        "Turnover": "run_info_turnover.txt",
+        "Composition": "run_info_composition.txt",
+    }
+    infos: dict[str, dict[str, str]] = {}
+    for layer, root in directories.items():
+        if not root.is_dir():
+            raise FileNotFoundError(f"{layer} run directory does not exist: {root}")
+        missing = [name for name in required[layer] if not (root / name).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"{layer} run directory is missing required files: {missing}; path={root}"
+            )
+        infos[layer] = _read_run_info(root / info_names[layer])
+
+    common_adjusted = {
+        "repository": config.repository,
+        "price_source_open": "etl:adj_open",
+        "price_source_close": "etl:adj_close",
+        "outcome_price_adjusted": "True",
+    }
+    _require_run_info_values(
+        "Baseline", infos["Baseline"],
+        common_adjusted | {"git_commit": config.baseline_commit},
+    )
+    _require_run_info_values(
+        "Turnover", infos["Turnover"],
+        common_adjusted | {
+            "git_commit": config.turnover_commit,
+            "baseline_commit": config.baseline_commit,
+        },
+    )
+    _require_run_info_values(
+        "Composition", infos["Composition"],
+        common_adjusted | {
+            "git_commit": config.composition_commit,
+            "baseline_commit": config.baseline_commit,
+            "turnover_base_commit": config.turnover_commit,
+        },
+    )
+
+    baseline = load_frozen_baseline(directories["Baseline"], config.baseline_commit)
+    turnover = load_frozen_turnover(
+        directories["Turnover"], config.turnover_commit, config.baseline_commit
+    )
+    composition = load_frozen_composition(
+        directories["Composition"], config.composition_commit,
+        config.turnover_commit, config.baseline_commit,
+    )
+    diagnostics = pd.DataFrame([
+        {
+            "layer": layer,
+            "run_dir": str(directories[layer]),
+            "repository": infos[layer]["repository"],
+            "commit": infos[layer]["git_commit"],
+            "baseline_commit": infos[layer].get("baseline_commit", config.baseline_commit),
+            "turnover_commit": infos[layer].get("turnover_base_commit", "not_applicable"),
+            "price_source_open": infos[layer]["price_source_open"],
+            "price_source_close": infos[layer]["price_source_close"],
+            "outcome_price_adjusted": infos[layer]["outcome_price_adjusted"],
+            "status": "PASS",
+        }
+        for layer in ("Baseline", "Turnover", "Composition")
+    ])
+    return {
+        "baseline": baseline,
+        "turnover": turnover,
+        "composition": composition,
+        "diagnostics": diagnostics,
+    }
 
 
 def prior_5d_return(close_0050: pd.Series) -> pd.Series:
@@ -111,6 +252,74 @@ def binary_regime(prior: pd.Series) -> pd.Series:
     regime.loc[valid & prior.gt(0)] = "Up"
     regime.loc[valid & prior.le(0)] = "Down"
     return regime
+
+
+def align_regime_to_signal_index(
+    signals: pd.DataFrame,
+    regime: pd.Series,
+    expected_warmup: int = 5,
+) -> tuple[pd.Series, pd.DataFrame]:
+    """Align regime labels explicitly and reject unclassified active signal dates."""
+    if not isinstance(signals.index, pd.DatetimeIndex):
+        raise TypeError("Signal index must be a pandas DatetimeIndex")
+    if not isinstance(regime.index, pd.DatetimeIndex):
+        raise TypeError("Regime index must be a pandas DatetimeIndex")
+    signal_duplicate_n = int(signals.index.duplicated().sum())
+    regime_duplicate_n = int(regime.index.duplicated().sum())
+    if signal_duplicate_n or regime_duplicate_n:
+        raise ValueError(
+            "Duplicate date index is not allowed: "
+            f"signal_duplicate_dates={signal_duplicate_n}, "
+            f"regime_duplicate_dates={regime_duplicate_n}"
+        )
+    if signals.index.tz != regime.index.tz:
+        raise ValueError(
+            "Signal and regime index timezones differ: "
+            f"signal={signals.index.tz}, regime={regime.index.tz}"
+        )
+    if not signals.index.is_monotonic_increasing or not regime.index.is_monotonic_increasing:
+        raise ValueError("Signal and regime indexes must be sorted ascending")
+
+    aligned = regime.reindex(signals.index).rename("regime")
+    active_any = signals.eq(1).fillna(False).any(axis=1).astype(bool)
+    observed_any = signals.notna().any(axis=1)
+    warmup_dates = regime.index[:expected_warmup]
+    expected_warmup_missing = aligned.isna() & aligned.index.isin(warmup_dates)
+    missing_after_reindex = aligned.isna()
+    unexpected_active_missing = active_any & missing_after_reindex & ~expected_warmup_missing
+    unexpected_observed_missing = observed_any & missing_after_reindex & ~expected_warmup_missing
+    if unexpected_observed_missing.any():
+        examples = signals.index[unexpected_observed_missing][:10].strftime("%Y-%m-%d").tolist()
+        raise ValueError(
+            "Observed signal dates have no corresponding Up/Down regime outside the expected "
+            f"prior-{expected_warmup}D warm-up: count={int(unexpected_observed_missing.sum())}, "
+            f"examples={examples}"
+        )
+
+    signal_tz = str(signals.index.tz) if signals.index.tz is not None else "naive"
+    regime_tz = str(regime.index.tz) if regime.index.tz is not None else "naive"
+    diagnostics = pd.DataFrame([{
+        "active_index_start": signals.index.min() if len(signals.index) else pd.NaT,
+        "active_index_end": signals.index.max() if len(signals.index) else pd.NaT,
+        "regime_index_start": regime.index.min() if len(regime.index) else pd.NaT,
+        "regime_index_end": regime.index.max() if len(regime.index) else pd.NaT,
+        "active_index_dtype": str(signals.index.dtype),
+        "regime_index_dtype": str(regime.index.dtype),
+        "active_index_timezone": signal_tz,
+        "regime_index_timezone": regime_tz,
+        "active_duplicate_dates": signal_duplicate_n,
+        "regime_duplicate_dates": regime_duplicate_n,
+        "missing_regime_dates_after_reindex": int(missing_after_reindex.sum()),
+        "expected_prior_5d_warmup_missing_dates": int(expected_warmup_missing.sum()),
+        "unexpected_active_signal_missing_regime_dates": int(unexpected_active_missing.sum()),
+        "unexpected_observed_signal_missing_regime_dates": int(unexpected_observed_missing.sum()),
+        "signal_dates_not_in_regime_index": int(len(signals.index.difference(regime.index))),
+        "extra_regime_dates": int(len(regime.index.difference(signals.index))),
+        "common_trading_date_count": int(len(signals.index.intersection(regime.index))),
+        "active_signal_date_count": int(active_any.sum()),
+        "alignment_status": "PASS",
+    }])
+    return aligned, diagnostics
 
 
 def select_primary_signal_specs(
@@ -155,12 +364,13 @@ def build_signal_frame(
 def regime_signal_distribution(
     signals: pd.DataFrame, regime: pd.Series, specs: pd.DataFrame
 ) -> pd.DataFrame:
+    regime_aligned, _ = align_regime_to_signal_index(signals, regime)
     rows = []
     for row in specs.itertuples():
         signal = signals[row.predictor]
-        active = signal.eq(1) & regime.notna()
-        up_n = int((active & regime.eq("Up")).sum())
-        down_n = int((active & regime.eq("Down")).sum())
+        active_bool = signal.eq(1).fillna(False).astype(bool)
+        up_n = int((active_bool & regime_aligned.eq("Up")).sum())
+        down_n = int((active_bool & regime_aligned.eq("Down")).sum())
         total = up_n + down_n
         rows.append({
             "family": row.family, "signal": row.predictor, "pr_group": row.pr_group,
@@ -487,6 +697,10 @@ def annual_regime_results(
     config: MarginRegimeInteractionConfig | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     config = config or MarginRegimeInteractionConfig()
+    empty_annual = pd.DataFrame(columns=ANNUAL_RESULT_COLUMNS)
+    empty_summary = pd.DataFrame(columns=ANNUAL_SUMMARY_COLUMNS)
+    if candidates.empty:
+        return empty_annual, empty_summary
     rows = []
     candidate_keys = candidates[["family", "signal", "pr_group", "k", "rolling_window", "outcome"]]
     for candidate in candidate_keys.drop_duplicates().itertuples():
@@ -515,7 +729,9 @@ def annual_regime_results(
                 "interaction_effect": interaction,
                 "interaction_direction": "positive" if interaction > 0 else "negative" if interaction < 0 else "zero_or_missing",
             })
-    annual = pd.DataFrame(rows)
+    annual = pd.DataFrame(rows, columns=ANNUAL_RESULT_COLUMNS)
+    if annual.empty:
+        return empty_annual, empty_summary
     summaries = []
     keys = ["family", "signal", "pr_group", "k", "rolling_window", "outcome"]
     for key, group in annual.groupby(keys, dropna=False):
@@ -539,7 +755,7 @@ def annual_regime_results(
             "interaction_direction_consistency": direction_ratio,
             "annual_robustness": "robust" if robust else "insufficient_or_mixed",
         })
-    return annual, pd.DataFrame(summaries)
+    return annual, pd.DataFrame(summaries, columns=ANNUAL_SUMMARY_COLUMNS)
 
 
 def regime_event_clusters(
@@ -582,7 +798,7 @@ def regime_event_clusters(
     if not result.empty:
         counts = result.groupby(["signal", "outcome"]).size().rename("cluster_N")
         result = result.join(counts, on=["signal", "outcome"])
-    return result
+    return result.reindex(columns=EVENT_CLUSTER_COLUMNS)
 
 
 def _create_run_directory(config: MarginRegimeInteractionConfig) -> Path:
@@ -601,18 +817,21 @@ def _write_run_info(
         finlab_version = importlib.metadata.version("finlab")
     except importlib.metadata.PackageNotFoundError:
         finlab_version = "unknown"
+    git_commit = _git_value(["rev-parse", "HEAD"])
     values = {
         "repository": config.repository,
         "branch": _git_value(["branch", "--show-current"]),
+        "git_commit": git_commit,
         "baseline_commit": config.baseline_commit,
         "turnover_commit": config.turnover_commit,
         "composition_commit": config.composition_commit,
-        "current_commit": _git_value(["rev-parse", "HEAD"]),
+        "current_commit": git_commit,
         "baseline_run_dir": baseline_dir, "turnover_run_dir": turnover_dir,
         "composition_run_dir": composition_dir,
         "run_timestamp": datetime.now(ZoneInfo(config.timezone)).isoformat(),
         "python_version": platform.python_version(), "finlab_version": finlab_version,
         "price_source_open": "etl:adj_open", "price_source_close": "etl:adj_close",
+        "outcome_price_adjusted": True,
         "prior_5d_return": "adjusted_close[t] / adjusted_close[t-5] - 1",
         "regime_definition": "Up if prior_5d_return > 0; Down if prior_5d_return <= 0",
         "primary_predictors": "margin_buy amount_ratio; margin_sell amount_ratio",
@@ -678,6 +897,11 @@ def _summary_markdown(result: dict[str, object]) -> str:
         & np.sign(paired_control.interaction_beta).eq(np.sign(paired_control.primary_interaction_beta))
     ).any()) if len(paired_control) else False
     annual_robust = bool(annual["annual_robustness"].eq("robust").any()) if len(annual) else False
+    annual_note = (
+        "No Level A/B candidates; annual confirmatory analysis not applicable."
+        if not fdr.evidence_level.isin(["Level A", "Level B"]).any()
+        else f"至少一項候選跨年度通過門檻：{_hypothesis_label(annual_robust)}。另列 2020、2022、2025 與所有年度。"
+    )
     cluster_counts = clusters.drop_duplicates(["signal", "outcome"])
     cluster_ratio = (
         cluster_counts.cluster_N.sum() / cluster_counts.daily_N.sum()
@@ -698,7 +922,7 @@ def _summary_markdown(result: dict[str, object]) -> str:
         "E. Margin Sell：Up vs Down": "若 Down 後偏多，只能列為 forced deleveraging/capitulation rebound 的可能解釋，不得直接等同去槓桿。",
         "F. Interaction regression": "Primary model 為 Signal + DownRegime + Signal×DownRegime；beta_up=β1，beta_down=β1+β3。",
         "G. FDR": f"Interaction global Level A 是否存在：{_hypothesis_label(any_a)}；scope=`{FDR_SCOPE}`，未併入 baseline/turnover FDR。",
-        "H. Annual robustness": f"至少一項候選跨年度通過門檻：{_hypothesis_label(annual_robust)}。另列 2020、2022、2025 與所有年度。",
+        "H. Annual robustness": annual_note,
         "I. Event clustering": f"連續同 regime signal 已合併；aggregate cluster/daily diagnostic ratio={cluster_ratio if np.isfinite(cluster_ratio) else 'NA'}。",
         "J. Turnover control": f"控制 amount-ratio Margin Turnover 後至少一項 interaction raw p<.05：{_hypothesis_label(control_survives)}。",
         "K. 主要風險": "Overlapping outcomes、tail 小樣本、年度/事件集中、制度變動、非因果解釋與 frozen-output selection 都可能限制結論。",
@@ -737,41 +961,53 @@ def run_margin_regime_interaction_study(
 ) -> dict[str, object]:
     """Run only this increment; do not invoke any earlier full study."""
     config = config or MarginRegimeInteractionConfig()
-    baseline = load_frozen_baseline(baseline_run_dir, config.baseline_commit)
-    turnover = load_frozen_turnover(turnover_run_dir, config.turnover_commit, config.baseline_commit)
-    composition = load_frozen_composition(
-        composition_run_dir, config.composition_commit, config.turnover_commit, config.baseline_commit
+    validated_inputs = validate_regime_input_runs(
+        baseline_run_dir, turnover_run_dir, composition_run_dir, config
     )
+    baseline = validated_inputs["baseline"]
+    turnover = validated_inputs["turnover"]
+    composition = validated_inputs["composition"]
     data = load_turnover_data(provider) if datasets is None else datasets
     universe, primary_symbols, limitation = build_universe_diagnostics(
         data["margin_balance"], data["market_value"]
     )
     specs = select_primary_signal_specs(baseline["fdr_results"], config.primary_tail)
-    signals = build_signal_frame(data, specs)
-    close = data["close"][config.target_symbol]
+    target_prices = pd.concat({
+        "open": data["open"][config.target_symbol],
+        "close": data["close"][config.target_symbol],
+    }, axis=1).dropna().sort_index()
+    close = target_prices["close"]
+    signals = build_signal_frame(data, specs).reindex(target_prices.index)
     prior = prior_5d_return(close)
     regime = binary_regime(prior)
-    outcomes = build_outcomes(
-        data["open"][config.target_symbol], close, config.outcome_horizons
+    regime_aligned, alignment_diagnostics = align_regime_to_signal_index(
+        signals, regime, config.prior_return_days
     )
-    price_diagnostics = validate_split_window(data["open"][config.target_symbol], close, outcomes)
-    distribution = regime_signal_distribution(signals, regime, specs)
-    primary = regime_primary_results(signals, regime, outcomes, specs)
-    interaction = run_interaction_models(signals, regime, outcomes, specs, config)
+    outcomes = build_outcomes(
+        target_prices["open"], close, config.outcome_horizons
+    )
+    price_diagnostics = validate_split_window(target_prices["open"], close, outcomes)
+    distribution = regime_signal_distribution(signals, regime_aligned, specs)
+    primary = regime_primary_results(signals, regime_aligned, outcomes, specs)
+    interaction = run_interaction_models(signals, regime_aligned, outcomes, specs, config)
     fdr, fdr_diag = apply_interaction_fdr(interaction)
     candidates = fdr[fdr.evidence_level.isin(["Level A", "Level B"])]
-    annual, annual_summary = annual_regime_results(candidates, signals, regime, outcomes, config)
-    clusters = regime_event_clusters(signals, regime, outcomes, specs)
+    annual, annual_summary = annual_regime_results(
+        candidates, signals, regime_aligned, outcomes, config
+    )
+    clusters = regime_event_clusters(signals, regime_aligned, outcomes, specs)
     controls = build_turnover_controls(data, primary_symbols, specs)
     turnover_controlled = run_interaction_models(
-        signals, regime, outcomes, specs, config, controls
+        signals, regime_aligned, outcomes, specs, config, controls
     )
     secondary = continuous_prior_robustness(signals, prior, outcomes, specs, config)
     result: dict[str, object] = {
         "baseline": baseline, "turnover": turnover, "composition": composition,
+        "input_validation": validated_inputs["diagnostics"],
         "universe": universe, "UNIVERSE_LIMITATION": limitation,
         "signal_specs": specs, "signals": signals, "prior_5d_return": prior,
-        "regime": regime, "outcomes": outcomes,
+        "regime": regime_aligned, "outcomes": outcomes,
+        "regime_alignment_diagnostics": alignment_diagnostics,
         "outcome_price_diagnostics": price_diagnostics,
         "signal_distribution": distribution, "primary_results": primary,
         "interaction_results": interaction, "interaction_fdr": fdr,
@@ -785,6 +1021,8 @@ def run_margin_regime_interaction_study(
         result["run_dir"] = run_dir
         outputs = {
             "regime_signal_distribution.csv": distribution,
+            "regime_input_validation.csv": validated_inputs["diagnostics"],
+            "regime_index_alignment_diagnostics.csv": alignment_diagnostics,
             "regime_primary_results.csv": primary,
             "regime_interaction_results.csv": interaction,
             "regime_interaction_fdr_results.csv": fdr,
