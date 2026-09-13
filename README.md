@@ -213,3 +213,27 @@ commit dependency chain、`etl:adj_open`、`etl:adj_close` 與
 `regime_index_alignment_diagnostics.csv`。只有 prior-5D 前五個 warm-up 缺值可被記錄後排除；
 其餘 active signal 無 regime 時停止。若 interaction 沒有 Level A/B，年度 confirmatory
 輸出仍保留正式空 schema，不以 Level C 取代。
+
+## Margin Buy + Sell + prior-return joint incremental study
+
+`research/margin-buy-sell-prior-return-joint` 以 baseline `88d9f267...`、turnover
+`e613b5e7...`、composition `cf16e4aa...` 與 regime interaction `a5ca1e98...` 為四層 frozen
+adjusted-price dependencies。獨立入口
+`src.margin_buy_sell_prior_return_joint.run_margin_buy_sell_prior_return_joint_study()` 只估計
+相同 k、相同 rolling window 的 Margin Buy/Sell amount-ratio PR95-100 joint model：
+
+`FutureReturn ~ BuyHigh + SellHigh + prior_5d_return + BuyHigh×prior + SellHigh×prior`
+
+不加入 Buy×Sell 或三階 interaction。`prior_5d_return` 維持 adjusted close[t] / adjusted
+close[t-5] - 1。Interaction（Buy×Prior、Sell×Prior）與 conditional main effects（Buy、Sell）
+使用兩個互不混合的 BH-FDR universe。2×2 joint states 只作描述，並預先要求每個 state 至少
+20 筆才能估計正式 joint interaction；condition number ≥1e12 或任一 VIF ≥10 的模型標為
+`unstable_collinearity`，不得硬解讀。
+
+Nested Model A/B/C 使用相同 complete cases 比較被另一 flow 吸收的幅度。Turnover
+amount-ratio 只在第二階段 robustness 加入，不擴大 primary FDR。只有 interaction Level A/B
+候選進年度 confirmatory analysis，不以 Level C 代替；連續 signal trading rows 另作 cluster
+diagnostics。Colab runner 是
+`notebooks/margin_buy_sell_prior_return_joint_colab.ipynb`，固定讀取 prompt 指定的四個 Drive
+run directories，不用 glob 或最新資料夾 fallback。輸出寫入 timestamped
+`outputs_joint_flow_prior_return/`，不覆寫既有研究或舊 run。
