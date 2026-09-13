@@ -12,5 +12,7 @@ outputs_turnover/*
 !outputs_turnover/.gitkeep
 outputs_composition/*
 !outputs_composition/.gitkeep
+outputs_regime_interaction/*
+!outputs_regime_interaction/.gitkeep
 .ipynb_checkpoints/
 .DS_Store

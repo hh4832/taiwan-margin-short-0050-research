@@ -173,3 +173,30 @@ June 2025 1:4 split discontinuity while leaving the O1→Ch formula, horizons,
 predictors, thresholds, and FDR universe unchanged. Each full run writes
 `outcome_price_diagnostics.csv`, uses an `_adjusted_price` output suffix, and
 records the price sources and corporate-action correction in `run_info.txt`.
+
+## Margin Buy / Sell × prior-return regime incremental study
+
+`research/margin-regime-interaction` 以 adjusted-price research chain 的 baseline
+`88d9f267ddfa4b5e80cadcb1709d34ab0d9ab2ce`、turnover
+`e613b5e7176c998bd1e8abe191f0e7a4caf2abd3`、composition
+`cf16e4aa7056c4c2c54e1d6248312bee6acac9da` 為 frozen dependencies。獨立入口
+`src.margin_regime_interaction.run_margin_regime_interaction_study()` 不呼叫或覆寫前三項研究。
+
+本研究只新增 `prior_5d_return = adjusted_close[t] / adjusted_close[t-5] - 1`：大於零為
+Up，否則為 Down；缺值不分類。Primary signals 僅使用 baseline 已定義的 Margin Buy 與
+Margin Sell `amount_ratio` high tail（PR95-100），不新增 normalization、threshold 或 regime
+horizon。每個 outcome 先輸出 A/B/C/D 四個 state，再以 HC3 估計
+`FutureReturn ~ Signal + DownRegime + Signal×DownRegime`。`beta_up` 是 Signal coefficient，
+`beta_down` 是 Signal 與 interaction coefficients 的和。
+
+新的 BH-FDR universe 只包含 binary primary model 的 interaction p-values；不與 baseline
+4,884 tests、turnover 或 composition 合併。Turnover-controlled model加入相同 k/window 的
+continuous amount-ratio turnover percentile。Continuous prior-return interaction 另存為
+secondary robustness，不進 primary FDR。只有 Level A/B interaction candidates 進年度
+robustness；連續 signal 日按交易列相鄰且 regime 相同合併為 event cluster。
+
+Colab 使用 `notebooks/margin_regime_interaction_incremental_colab.ipynb`，必須明確指定三個
+frozen run directories。結果寫入 timestamped `outputs_regime_interaction/`，且
+`run_info_regime_interaction.txt` 記錄三個 dependency commits、current commit 與
+`etl:adj_open` / `etl:adj_close`。Signal occurrence 差異不能單獨證明預測效果差異；
+Margin Sell 也不得未經 occurrence 與 interaction 證據直接解讀成去槓桿。
